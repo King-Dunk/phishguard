@@ -10,6 +10,23 @@ from pydantic import BaseModel, ConfigDict, Field
 AuthResult = Literal["pass", "fail", "none"]
 
 
+class Attachment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(default="", max_length=256)
+    content_type: str = Field(default="", max_length=128)
+    size: int = Field(default=0, ge=0)
+
+
+class DisplayedLink(BaseModel):
+    """An HTML anchor: what the reader sees (`text`) vs where it really goes (`href`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(default="", max_length=512)
+    href: str = Field(default="", max_length=2048)
+
+
 class EmailMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -18,11 +35,14 @@ class EmailMessage(BaseModel):
     sender_name: str = Field(default="", max_length=256)
     sender_email: str = Field(max_length=320)
     reply_to: str | None = Field(default=None, max_length=320)
+    return_path: str | None = Field(default=None, max_length=320)
     recipient: str = Field(default="", max_length=320)
     subject: str = Field(default="", max_length=1000)
     body: str = Field(default="", max_length=20000)
     links: list[str] = Field(default_factory=list, max_length=100)
     attachments: list[str] = Field(default_factory=list, max_length=50)
+    attachment_meta: list[Attachment] = Field(default_factory=list, max_length=50)
+    link_pairs: list[DisplayedLink] = Field(default_factory=list, max_length=100)
     sender_reputation: float | None = Field(default=None, ge=0, le=1)
     sender_domain_age_days: int | None = Field(default=None, ge=0)
     spf: AuthResult = "none"

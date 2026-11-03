@@ -5,6 +5,7 @@ from .executor import Executor
 from .gateway import (
     MFAFailed,
     MFAGateway,
+    OperationLocked,
     PendingExpired,
     PendingFinalized,
     PendingNotFound,
@@ -12,20 +13,26 @@ from .gateway import (
 )
 from .mfa import CaptureChannel, MFAChannel, StderrChannel
 from .policy import ActionType, UnknownActionError, requires_mfa
+from .store import SQLiteStore
+from .totp import AlreadyEnrolled, TOTPManager
 
 __all__ = [
     "ActionType",
+    "AlreadyEnrolled",
     "AuditLog",
     "CaptureChannel",
     "Executor",
     "MFAChannel",
     "MFAFailed",
     "MFAGateway",
+    "OperationLocked",
     "PendingExpired",
     "PendingFinalized",
     "PendingNotFound",
+    "SQLiteStore",
     "StderrChannel",
     "SubmitResult",
+    "TOTPManager",
     "UnknownActionError",
     "requires_mfa",
 ]

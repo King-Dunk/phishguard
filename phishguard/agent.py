@@ -27,6 +27,8 @@ class AnalysisResult:
     circuit_break: str | None = None  # "max_steps" | "token_budget" | None
     rationale: str = ""
     tool_calls: list[str] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class PhishingAgent:
@@ -42,7 +44,7 @@ class PhishingAgent:
         base_risk, base_feats = analyze_email(email, self.ctx)
         toolbox = ReadOnlyToolbox(email, self.ctx)
         messages: list[dict] = [{"role": "user", "content": f"Analyze email id={email.id}. Use the tools to read it."}]
-        steps = tokens = 0
+        steps = tokens = in_tok = out_tok = 0
         llm_risk: float | None = None
         rationale = ""
         broke: str | None = None
@@ -63,6 +65,8 @@ class PhishingAgent:
             )
             steps += 1
             tokens += resp.input_tokens + resp.output_tokens
+            in_tok += resp.input_tokens
+            out_tok += resp.output_tokens
             if resp.tool_calls:
                 blocks: list[dict] = []
                 if resp.text:
@@ -95,6 +99,8 @@ class PhishingAgent:
             circuit_break=broke,
             rationale=rationale[:500],
             tool_calls=toolbox.calls,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
 

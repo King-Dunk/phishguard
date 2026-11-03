@@ -1,0 +1,22 @@
+Return-Path: <shipping@fast-parcel-track.com>
+Authentication-Results: mx.acme-corp.com; spf=fail smtp.mailfrom=fast-parcel-track.com; dkim=fail header.d=fast-parcel-track.com; dmarc=fail
+From: Parcel Service <shipping@fast-parcel-track.com>
+To: jun.park@acme-corp.com
+Subject: Delivery failed - action required
+Date: Thu, 05 Mar 2026 15:45:00 +0000
+Message-ID: <trk-9@fast-parcel-track.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B3"
+
+--B3
+Content-Type: text/plain; charset=utf-8
+
+Your parcel could not be delivered. Open the attached label within 24 hours.
+
+--B3
+Content-Type: application/x-iso9660-image
+Content-Disposition: attachment; filename="label_7731.iso"
+Content-Transfer-Encoding: base64
+
+Q0QwMDEgZmFrZSBpc28=
+--B3--

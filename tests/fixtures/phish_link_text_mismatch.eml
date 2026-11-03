@@ -1,0 +1,12 @@
+Return-Path: <it@acme-helpdesk.info>
+Authentication-Results: mx.acme-corp.com; spf=pass smtp.mailfrom=acme-helpdesk.info; dkim=pass header.d=acme-helpdesk.info; dmarc=pass header.from=acme-helpdesk.info
+From: ACME IT Support <it@acme-helpdesk.info>
+To: tom.r@acme-corp.com
+Subject: Your mailbox password expires today
+Date: Tue, 03 Mar 2026 14:00:00 +0000
+Message-ID: <pw-77@acme-helpdesk.info>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Your password expires today. Verify your account to keep access:</p>
+<p><a href="http://198.51.100.23/owa/login.php">https://login.acme-corp.com/owa</a></p></body></html>

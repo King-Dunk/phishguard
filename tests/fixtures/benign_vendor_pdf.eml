@@ -1,0 +1,22 @@
+Return-Path: <billing@globalsupply.com>
+Authentication-Results: mx.acme-corp.com; spf=pass smtp.mailfrom=globalsupply.com; dkim=pass header.d=globalsupply.com; dmarc=pass header.from=globalsupply.com
+From: Global Supply Billing <billing@globalsupply.com>
+To: ap.team@acme-corp.com
+Subject: Statement for February
+Date: Wed, 04 Mar 2026 11:00:00 +0000
+Message-ID: <stmt-0226@globalsupply.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUND"
+
+--BOUND
+Content-Type: text/plain; charset=utf-8
+
+Hello, please find our February statement attached. No action is needed.
+
+--BOUND
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="statement-feb.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQgZmFrZSBpbnZvaWNl
+--BOUND--
