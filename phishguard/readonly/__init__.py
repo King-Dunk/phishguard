@@ -1,7 +1,7 @@
 """READ-ONLY package. It must never import phishguard.mutating (enforced by tests)."""
 
 from ..models import EmailMessage
-from .eml import EmlTooLarge, parse_eml
+from .eml import EmlRejected, EmlTooComplex, EmlTooLarge, parse_eml
 from .features import DetectionContext, Feature, explain, extract_features, risk_percent
 from .tools import READ_ONLY_TOOL_NAMES, ReadOnlyToolbox
 
@@ -14,6 +14,8 @@ def analyze_email(email: EmailMessage, ctx: DetectionContext | None = None) -> t
 
 __all__ = [
     "DetectionContext",
+    "EmlRejected",
+    "EmlTooComplex",
     "EmlTooLarge",
     "Feature",
     "READ_ONLY_TOOL_NAMES",

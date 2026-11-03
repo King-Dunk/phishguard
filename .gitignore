@@ -14,3 +14,5 @@ build/
 *.db
 *.db-wal
 *.db-shm
+data/external/
+redteam/out/

@@ -42,7 +42,8 @@ _SENSITIVE_TEXT = re.compile(
     r"|refund|salary|payroll|password|credential|转账|汇款|发票|付款|银行|账户|账号|密码|礼品卡|工资"
 )
 _SENSITIVE_KEYS = re.compile(r"amount|iban|swift|account|bank|invoice|payee|beneficiary|currency|password")
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+_ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00ad"))
+_BIDI = dict.fromkeys(map(ord, "\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"))
 
 
 class UnknownActionError(ValueError):
@@ -51,15 +52,27 @@ class UnknownActionError(ValueError):
 
 def parse_action_type(raw: str) -> ActionType:
     """Default-deny: anything not in the enum is rejected."""
-    norm = unicodedata.normalize("NFKC", str(raw)).translate(_ZERO_WIDTH).strip().lower()
+    norm = unicodedata.normalize("NFKC", str(raw)).translate(_ZERO_WIDTH).translate(_BIDI).strip().lower()
     try:
         return ActionType(norm)
     except ValueError:
         raise UnknownActionError(f"unknown action type: {raw!r}") from None
 
 
+MAX_PARAM_DEPTH = 6
+MAX_PARAM_NODES = 2000
+
+
+def normalize_user(raw: str) -> str:
+    """One canonical identity per user, so 'Alice', ' alice' and fullwidth 'ａｌｉｃｅ' can't
+    dodge that user's TOTP enrollment, lockout counter or audit trail."""
+    s = unicodedata.normalize("NFKC", str(raw)).translate(_ZERO_WIDTH).translate(_BIDI).strip().casefold()
+    return s.encode("utf-8", "replace").decode("utf-8")  # lone surrogates would crash sqlite3 binding
+
+
 def _walk(obj: Any, depth: int = 0):
-    if depth > 6:
+    if depth > MAX_PARAM_DEPTH:
+        yield "overflow", ""  # too deep to inspect: caller must fail closed
         return
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -76,12 +89,14 @@ def requires_mfa(action: ActionType, params: dict[str, Any], reason: str = "") -
     if action in ALWAYS_MFA:
         return True
     texts = [reason]
-    for kind, s in _walk(params):
+    for n, (kind, s) in enumerate(_walk(params)):
+        if kind == "overflow" or n > MAX_PARAM_NODES:
+            return True  # fail closed: whatever we could not inspect might move money
         if kind == "key" and _SENSITIVE_KEYS.search(unicodedata.normalize("NFKC", s).lower()):
             return True
         texts.append(s)
     for t in texts:
-        clean = unicodedata.normalize("NFKC", t).translate(_ZERO_WIDTH).lower()
+        clean = unicodedata.normalize("NFKC", t).translate(_ZERO_WIDTH).translate(_BIDI).lower()
         if _SENSITIVE_TEXT.search(clean):
             return True
     return False

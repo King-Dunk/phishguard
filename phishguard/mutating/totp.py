@@ -13,6 +13,8 @@ import time
 
 import pyotp
 
+from .policy import normalize_user
+
 
 class AlreadyEnrolled(RuntimeError):
     pass
@@ -29,9 +31,11 @@ class TOTPManager:
         self._lock = threading.Lock()
 
     def _get(self, user: str) -> tuple[str, int] | None:
+        user = normalize_user(user)
         return self._store.get_totp(user) if self._store else self._mem.get(user)
 
     def _put(self, user: str, secret: str, last_step: int) -> None:
+        user = normalize_user(user)
         if self._store:
             self._store.put_totp(user, secret, last_step)
         else:
@@ -48,7 +52,9 @@ class TOTPManager:
                 raise AlreadyEnrolled(user)
             secret = pyotp.random_base32()
             self._put(user, secret, -1)
-        return pyotp.TOTP(secret, interval=self.interval).provisioning_uri(name=user, issuer_name=self.issuer)
+        return pyotp.TOTP(secret, interval=self.interval).provisioning_uri(
+            name=normalize_user(user), issuer_name=self.issuer
+        )
 
     def verify(self, user: str, code: str) -> bool:
         with self._lock:

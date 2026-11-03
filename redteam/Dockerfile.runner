@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY phishguard ./phishguard
+COPY redteam ./redteam
+COPY scripts ./scripts
+RUN useradd --create-home --uid 10002 attacker && mkdir /out && chown attacker /out
+USER attacker
+CMD ["python", "-m", "redteam.runner", "--mode", "http"]

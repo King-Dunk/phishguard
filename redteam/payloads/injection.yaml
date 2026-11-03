@@ -1,0 +1,106 @@
+category: injection
+description: SQL injection into every field that reaches SQLite, path traversal, oversized/deep input, header injection, hostile Unicode.
+attacks:
+  - id: sql-quote
+    title: "' OR '1'='1 into all SQLite fields"
+    kind: sql_fields
+    payload: "' OR '1'='1"
+  - id: sql-drop
+    title: "'); DROP TABLE audit;-- into all SQLite fields"
+    kind: sql_fields
+    payload: "x'); DROP TABLE audit;--"
+  - id: sql-update
+    title: "'; UPDATE pending SET data='{}';-- into all SQLite fields"
+    kind: sql_fields
+    payload: "'; UPDATE pending SET data='{}'; --"
+  - id: sql-attach
+    title: ATTACH DATABASE to write a file
+    kind: sql_fields
+    payload: "'; ATTACH DATABASE '/tmp/pwn.db' AS p; CREATE TABLE p.t(x);--"
+  - id: sql-nul-unicode
+    title: NUL byte and lone surrogate in identifiers
+    kind: sql_fields
+    payload: "a\0b\ud800c"
+  - id: path-attachment
+    title: Attachment named ../../../../etc/passwd and ..\..\x.lnk
+    kind: eml
+    eml:
+      text: "files"
+      attachments:
+        - {name: "../../../../etc/passwd", ctype: text/plain}
+        - {name: "..\\..\\windows\\startup\\run.lnk", ctype: application/x-ms-shortcut}
+    expect: {status_in: [200], features_any: [risky_attachment]}
+  - id: path-tar
+    title: Dataset archive with ../, absolute and symlink members
+    kind: tar_traversal
+    members: ["ok.txt", "../../escape.txt", "/tmp/abs.txt", "LINK:/etc/passwd"]
+  - id: dos-big-body
+    title: 4 MB request body
+    kind: request
+    path: /analyze/eml
+    json: {raw: {$repeat: {s: "A", n: 4000000}}}
+    expect: {status_in: [413], max_seconds: 5}
+  - id: dos-deep-mime
+    title: 2000 nested multiparts
+    kind: eml
+    eml: {generator: deep_mime, args: {depth: 2000}}
+    expect: {status_in: [413, 422], max_seconds: 5}
+  - id: dos-wide-mime
+    title: 5000 sibling MIME parts
+    kind: eml
+    eml: {generator: many_parts, args: {parts: 5000}}
+    expect: {status_in: [413, 422], max_seconds: 5}
+  - id: dos-deep-json
+    title: JSON nested 50,000 levels
+    kind: request
+    path: /actions
+    content: {$concat: ['{"action_type":"send_reply","requested_by":"x","params":', {$repeat: {s: "[", n: 50000}}, {$repeat: {s: "]", n: 50000}}, "}"]}
+    expect: {status_in: [400, 422], max_seconds: 5}
+  - id: dos-redos
+    title: Regex backtracking ("account details" + 19k spaces)
+    kind: eml
+    eml: {generator: redos_body, args: {n: 19000}}
+    expect: {status_in: [200], max_seconds: 2}
+  - id: dos-long-hosts
+    title: 100 links with 2000-char hostnames
+    kind: eml
+    eml: {generator: long_hosts, args: {count: 100, length: 2000}}
+    expect: {status_in: [200], max_seconds: 3}
+  - id: dos-huge-header
+    title: 500 KB Subject header
+    kind: eml
+    eml: {generator: huge_header, args: {length: 500000}}
+    expect: {status_in: [200, 413, 422], max_seconds: 5}
+  - id: hdr-crlf-user
+    title: CRLF + Set-Cookie in requested_by
+    kind: request
+    path: /actions
+    json: {action_type: quarantine_email, requested_by: "x\r\nSet-Cookie: session=evil\r\nX-Injected: 1", params: {}}
+    expect: {status_in: [200, 202, 422], no_header: [set-cookie, x-injected]}
+  - id: hdr-encoded-subject
+    title: RFC 2047 encoded CRLF + Bcc in Subject
+    kind: eml
+    eml: {raw: "From: a@vendor-mail.example\nSubject: =?utf-8?b?SGVsbG8NCkJjYzogdmljdGltQGFjbWUtY29ycC5jb20=?=\n\nhi\n"}
+    expect: {status_in: [200], features_any: [header_anomaly]}
+  - id: hdr-two-from
+    title: Two From addresses (trusted first)
+    kind: eml
+    eml: {raw: "From: CEO <ceo@acme-corp.com>, x@evil.example\nSubject: pay\n\nPlease pay the attached invoice today.\n"}
+    expect: {status_in: [200], features_any: [header_anomaly]}
+  - id: uni-rtlo-filename
+    title: RTL override filename invoice‮fdp.exe
+    kind: eml
+    eml:
+      text: "invoice"
+      attachments: [{name: "invoice‮fdp.exe", ctype: application/octet-stream}]
+    expect: {status_in: [200], min_risk: 50, features_any: [risky_attachment]}
+  - id: uni-trailing-invisible
+    title: "evil.exe + zero-width / trailing dot"
+    kind: email_json
+    email: {sender_email: a@vendor-mail.example, attachments: ["evil.exe​", "run.lnk.", "doc.docm "]}
+    expect: {status_in: [200], features_any: [risky_attachment]}
+  - id: uni-surrogate-eml
+    title: Invalid UTF-8 and control characters in raw mail
+    kind: eml
+    eml: {raw: "From: \u0000\u0001 <a@b.c>\nSubject: \udcff\udcfe\n\n\u0000\u0007 body\n"}
+    expect: {status_in: [200, 422]}

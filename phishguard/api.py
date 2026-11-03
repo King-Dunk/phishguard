@@ -6,12 +6,15 @@ limited per key. Failed auth is rate limited per client address, which also slow
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import __version__
 from .agent import AnalysisResult, PhishingAgent
@@ -32,9 +35,10 @@ from .mutating import (
     TOTPManager,
     UnknownActionError,
 )
-from .readonly import EmlTooLarge, parse_eml
+from .mutating.policy import MAX_PARAM_DEPTH
+from .readonly import EmlTooComplex, EmlTooLarge, parse_eml
 from .readonly.eml import MAX_RAW_BYTES
-from .security import APIKeyAuth, RateLimiter
+from .security import APIKeyAuth, BodySizeLimit, RateLimiter, json_depth
 
 
 class AnalyzeRequest(BaseModel):
@@ -54,6 +58,14 @@ class ActionRequest(BaseModel):
     requested_by: str = Field(min_length=1, max_length=100)
     reason: str = Field(default="", max_length=1000)
 
+    @field_validator("params")
+    @classmethod
+    def _shallow(cls, v: dict[str, Any]) -> dict[str, Any]:
+        # The policy also fails closed on deep params; rejecting here gives the caller a clear 422.
+        if json_depth(v) > MAX_PARAM_DEPTH:
+            raise ValueError(f"params nested deeper than {MAX_PARAM_DEPTH} levels")
+        return v
+
 
 class VerifyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -65,6 +77,14 @@ class VerifyRequest(BaseModel):
 class EnrollRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user: str = Field(min_length=1, max_length=100)
+
+
+class SafeJSONResponse(JSONResponse):
+    """ASCII-escaped JSON. Attacker text may hold lone UTF-16 surrogates ("\\ud800" is valid JSON);
+    encoding those as UTF-8 raises and turned every echoing endpoint into a 500."""
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(content, ensure_ascii=True, separators=(",", ":"), default=str).encode("ascii")
 
 
 def _build_llm(settings: Settings) -> LLMClient:
@@ -113,7 +133,8 @@ def create_app(
         **kw,
     )
     agent = PhishingAgent(llm, settings)
-    auth = APIKeyAuth(settings.api_keys)
+    auth = APIKeyAuth(settings.api_keys + settings.admin_keys)
+    admin = APIKeyAuth(settings.admin_keys)
     limiter = RateLimiter(settings.rate_limit_per_minute, 60.0, **kw)
 
     def guard(request: Request) -> str:
@@ -131,7 +152,22 @@ def create_app(
         return bucket
 
     protected = [Depends(guard)]
-    app = FastAPI(title="PhishGuard", version=__version__)
+    app = FastAPI(title="PhishGuard", version=__version__, default_response_class=SafeJSONResponse)
+
+    @app.exception_handler(HTTPException)
+    def _http_error(request: Request, exc: HTTPException):
+        return SafeJSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+
+    @app.exception_handler(RequestValidationError)
+    def _invalid(request: Request, exc: RequestValidationError):
+        return SafeJSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
+    app.add_middleware(BodySizeLimit, max_bytes=settings.max_body_bytes)
+
+    @app.exception_handler(RecursionError)
+    def _too_deep(request: Request, exc: RecursionError):  # e.g. JSON body "[[[[...]]]]"
+        return SafeJSONResponse(status_code=400, content={"detail": "input nested too deeply"})
+
     app.state.gateway = gateway
     app.state.settings = settings
     app.state.store = store
@@ -157,6 +193,8 @@ def create_app(
             email = parse_eml(req.raw, settings.trusted_authserv_id)
         except EmlTooLarge as e:
             raise HTTPException(413, str(e)) from None
+        except EmlTooComplex as e:
+            raise HTTPException(422, str(e)) from None
         out = _result(email.id, agent.analyze(email))
         out["parsed"] = {
             "from": f"{email.sender_name} <{email.sender_email}>",
@@ -179,7 +217,7 @@ def create_app(
         if res.status == "executed":
             return {"status": "executed", "result": res.result}
         nxt = "authenticator app code" if res.method == "totp" else "out-of-band code"
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=202,
             content={
                 "status": "pending_mfa",
@@ -193,7 +231,11 @@ def create_app(
         )
 
     @app.post("/mfa/enroll", dependencies=protected)
-    def mfa_enroll(req: EnrollRequest):
+    def mfa_enroll(req: EnrollRequest, request: Request):
+        # Enrollment binds a second factor to an identity, so ordinary client keys may not do it:
+        # otherwise any caller could enroll a victim first and then approve as them.
+        if not settings.open_enrollment and admin.check(request.headers.get("x-api-key")) is None:
+            raise HTTPException(403, "enrollment requires an admin key")
         try:
             uri = gateway.totp.enroll(req.user)
         except AlreadyEnrolled:

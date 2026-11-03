@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import math
 import re
 import unicodedata
@@ -32,6 +33,9 @@ WEIGHTS = {
     "payment_keywords": 0.20,
     "moderate_reputation": 0.15,
     "return_path_mismatch": 0.12,
+    "header_anomaly": 0.45,
+    "obfuscated_text": 0.25,
+    "hidden_html_text": 0.30,
     "young_domain": 0.10,
     "no_authentication": 0.08,
     "off_hours_send": 0.08,
@@ -51,7 +55,7 @@ PAYMENT = re.compile(
 )
 BANK_CHANGE = re.compile(
     r"(new|updated|changed|different|revised)\s+(bank(ing)?|payment|account|remittance)\s+(details|information|instructions|account|number|info)"
-    r"|(bank(ing)?|account)\s+(details|information|number)\s+(has|have|had)?\s*(been\s+)?(changed|updated|revised)"
+    r"|(bank(ing)?|account)\s+(details|information|number)\s+(?:(?:has|have|had)\s+)?(?:been\s+)?(changed|updated|revised)"
     r"|change\s+(of\s+)?(our\s+)?(bank|account)"
     r"|更换.{0,6}(账户|账号)|账户.{0,4}变更"
 )
@@ -65,6 +69,12 @@ INJECTION = re.compile(
     r"ignore (all |any )?(previous|prior|above) (instructions|rules)|you are now|system prompt"
     r"|disregard .{0,30}(instructions|rules)|mfa (is )?(already )?(verified|approved|passed)"
     r"|(skip|bypass) (the )?mfa|approve (this|the) (transfer|payment)|忽略.{0,6}(指令|规则)|已通过.{0,3}验证"
+    r"|(you have been|you've been|you are|you're) (granted|given|authori[sz]ed)\b.{0,30}(mfa|authori[sz]ation|approval|clearance)"
+    r"|\b(as|acting as|in the role of) (the )?(system|admin(istrator)?|root|developer)\b"
+    r"|\b(execute|perform|initiate|complete) (the |this |a )?(wire |fund )?(transfer|payment|wire)\b.{0,40}\b(now|immediately|without)"
+    r"|\b(transfer_funds|pay_invoice|approve_invoice|change_bank_details|reset_password|change_account_email)\b"
+    r"|</?(system|instructions?|assistant|tool_use|tool_result)>"
+    r"|已获得.{0,6}(mfa|授权|验证|批准)|以系统(身份|管理员)|系统指令|执行转账"
 )
 RISKY_EXT = (
     ".exe",
@@ -101,7 +111,14 @@ _HOMOGLYPHS = str.maketrans(
 )
 _URLISH = re.compile(r"^(https?://)?([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?(/\S*)?$")
 DOUBLE_EXT = re.compile(r"\.(pdf|docx?|xlsx?)\.(exe|scr|js|bat|lnk)$")
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+_ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00ad"))
+# bidirectional controls: "invoice\u202efdp.exe" displays as "invoiceexe.pdf"
+BIDI = "\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+_INVISIBLE = {**_ZERO_WIDTH, **dict.fromkeys(map(ord, BIDI))}
+_LEET = str.maketrans({"@": "a", "4": "a", "3": "e", "1": "i", "!": "i", "0": "o", "$": "s", "5": "s", "7": "t"})
+_SPLIT_RUN = re.compile(r"(?<![\w@$!])(?:[\w@$!][ .\-_*/|]){2,}[\w@$!](?![\w@$!])")
+_B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
+MAX_HOST = 253  # DNS limit; longer "hosts" are cut so string metrics stay cheap
 
 
 @dataclass(frozen=True)
@@ -135,15 +152,40 @@ class Feature:
 
 
 def clean_text(s: str) -> str:
-    return unicodedata.normalize("NFKC", s).translate(_ZERO_WIDTH).lower()
+    return unicodedata.normalize("NFKC", s).translate(_INVISIBLE).lower()
+
+
+def clean_filename(name: str) -> str:
+    """Name as Windows would treat it: no invisible/bidi chars, no trailing dots or spaces."""
+    return clean_text(name).strip().rstrip(". ")
+
+
+def deobfuscate(text: str) -> str:
+    """Undo common keyword hiding: 'w i r e', 'u-r-g-e-n-t', 'tr@nsf3r'."""
+    joined = _SPLIT_RUN.sub(lambda m: re.sub(r"[ .\-_*/|]", "", m.group(0)), text)
+    return joined.translate(_LEET)
+
+
+def decoded_blobs(text: str, limit: int = 10) -> str:
+    """Decode base64-looking tokens (an LLM would read them; the rules should too)."""
+    out = []
+    for tok in _B64.findall(text)[:limit]:
+        try:
+            raw = base64.b64decode(tok + "=" * (-len(tok) % 4), validate=False)
+            dec = raw.decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if dec.isprintable() or "\n" in dec:
+            out.append(dec)
+    return clean_text("\n".join(out))
 
 
 def _compact(s: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", clean_text(s))
+    return re.sub(r"[^a-z0-9]", "", clean_text(s).translate(_HOMOGLYPHS))
 
 
 def domain_of(addr: str) -> str:
-    return addr.rsplit("@", 1)[-1].strip(" <>").lower()
+    return addr.rsplit("@", 1)[-1].strip(" <>").lower()[:MAX_HOST]
 
 
 def registrable(domain: str) -> str:
@@ -190,6 +232,7 @@ def skeleton(domain: str) -> str:
 
 def homoglyph_of(domain: str, trusted: tuple[str, ...]) -> str | None:
     """Trusted domain that `domain` spoofs with punycode / mixed-script letters, if any."""
+    domain = domain[:MAX_HOST]
     if domain.isascii() and "xn--" not in domain:
         return None
     sk = skeleton(domain)
@@ -203,6 +246,7 @@ def homoglyph_of(domain: str, trusted: tuple[str, ...]) -> str | None:
 
 def lookalike_of(domain: str, trusted: tuple[str, ...]) -> tuple[str, float] | None:
     """Return (trusted_domain, similarity) if `domain` imitates a trusted one."""
+    domain = domain[:MAX_HOST]  # similarity metrics are quadratic; DNS names are <= 253 chars
     if not domain or is_under(domain, trusted) or domain in FREE_MAIL:
         return None
     reg = registrable(domain)
@@ -212,7 +256,7 @@ def lookalike_of(domain: str, trusted: tuple[str, ...]) -> tuple[str, float] | N
             return t, 1.0
         a, b = _norm(reg), _norm(t)
         sim = 1.0 if a == b else SequenceMatcher(None, a, b).ratio()
-        if sim < 0.84 and min(len(a), len(b)) >= 6 and levenshtein(a, b) <= 2:
+        if sim < 0.84 and min(len(a), len(b)) >= 6 and abs(len(a) - len(b)) <= 2 and levenshtein(a, b) <= 2:
             sim = max(sim, round(1 - levenshtein(a, b) / max(len(a), len(b)), 2))
             sim = max(sim, 0.84)  # edit distance <= 2 on a long name is a look-alike
         if sim >= 0.84 and (best is None or sim > best[1]):
@@ -221,7 +265,11 @@ def lookalike_of(domain: str, trusted: tuple[str, ...]) -> tuple[str, float] | N
 
 
 def _host(url: str) -> str:
-    return (urlparse(url if "//" in url else "//" + url).hostname or "").lower()
+    url = url[:2048]
+    try:
+        return (urlparse(url if "//" in url else "//" + url).hostname or "").lower()[:MAX_HOST]
+    except ValueError:  # e.g. malformed IPv6 literal
+        return ""
 
 
 def _is_ip(host: str) -> bool:
@@ -273,18 +321,39 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
         elif age < 90:
             add("young_domain", f"sender domain is {age} days old")
 
-    if m := URGENCY.search(text):
-        add("urgency_language", f"matched '{m.group(0)}'")
-    if m := PAYMENT.search(text):
-        add("payment_keywords", f"matched '{m.group(0)}'")
-    if m := BANK_CHANGE.search(text):
-        add("bank_detail_change", f"matched '{m.group(0)}'")
-    if m := SECRECY.search(text):
-        add("secrecy_request", f"matched '{m.group(0)}'")
-    if m := CREDENTIAL.search(text):
-        add("credential_request", f"matched '{m.group(0)}'")
-    if m := INJECTION.search(text):
-        add("prompt_injection_attempt", f"matched '{m.group(0)}'")
+    anomalies = list(email.header_anomalies)
+    for label, val in [("display name", email.sender_name), *(("attachment name", x) for x in email.attachments)]:
+        if any(ch in val for ch in BIDI):
+            anomalies.append(f"bidirectional control character in {label} {clean_text(val)!r}")
+    if anomalies:
+        add("header_anomaly", "; ".join(anomalies)[:300])
+
+    # Text the reader (or an LLM) can see: subject, body, attachment names, link texts,
+    # plus base64 blobs decoded. Keywords are matched on it and on a de-obfuscated copy.
+    extra = [clean_filename(a) for a in email.attachments] + [clean_text(lp.text) for lp in email.link_pairs]
+    hidden_txt = clean_text(email.hidden_text)
+    if len(hidden_txt.strip()) >= 20:
+        add("hidden_html_text", f"{len(hidden_txt)} chars of CSS-hidden text: '{hidden_txt[:60]}'")
+    seen = "\n".join([text, *extra, hidden_txt])
+    hidden = decoded_blobs(email.body)
+    variants = [("", seen), (" (base64-decoded)", hidden), (" (de-obfuscated)", deobfuscate(seen))]
+    obfuscated = None
+    for name, rx in (
+        ("urgency_language", URGENCY),
+        ("payment_keywords", PAYMENT),
+        ("bank_detail_change", BANK_CHANGE),
+        ("secrecy_request", SECRECY),
+        ("credential_request", CREDENTIAL),
+        ("prompt_injection_attempt", INJECTION),
+    ):
+        for tag, t in variants:
+            if t and (m := rx.search(t)):
+                add(name, f"matched '{m.group(0)}'{tag}")
+                if tag and obfuscated is None:
+                    obfuscated = f"keyword '{m.group(0)}' only visible{tag}"
+                break
+    if obfuscated:
+        add("obfuscated_text", obfuscated)
 
     name = clean_text(email.sender_name)
     external = not is_under(sdom, ctx.trusted_domains)
@@ -326,7 +395,7 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
 
     names = [(a, "") for a in email.attachments] + [(m.filename, m.content_type) for m in email.attachment_meta]
     for att, ctype in names:
-        a = att.lower()
+        a = clean_filename(att)
         kind = (
             "macro document"
             if a.endswith(MACRO_EXT) or "macroenabled" in ctype.lower()

@@ -11,7 +11,7 @@
    payment_keywords: +13.3 (matched 'bank account')
 
 == 2. transfer_funds is suspended by the MFA gateway
-<- HTTP 202 {"status":"pending_mfa","pending_id":"z-bx3z3OebRRJn0r","confirm_digest":"dc915601d5657cc0","summary":"transfer_funds (digest dc915601d5657cc0) requested by alice","expires_at":1793677450.1416261,"mfa_method":"channel","next":"POST /mfa/verify with the out-of-band code and confirm_digest"}
+<- HTTP 202 {"status":"pending_mfa","pending_id":"2RZ_lqMEscigGQRj","confirm_digest":"dc915601d5657cc0","summary":"transfer_funds (digest dc915601d5657cc0) requested by alice","expires_at":1793678831.2632627,"mfa_method":"channel","next":"POST /mfa/verify with the out-of-band code and confirm_digest"}
 
 == 3. wrong code is rejected
 <- HTTP 403 {"detail":{"error":"verification failed (bad_code)","attempts_left":2}}

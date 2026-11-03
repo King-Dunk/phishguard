@@ -21,25 +21,77 @@ from html.parser import HTMLParser
 from ..models import Attachment, DisplayedLink, EmailMessage
 
 MAX_RAW_BYTES = 2_000_000
+MAX_MIME_PARTS = 200  # a real mail has a handful; thousands is a parser DoS
+MAX_MIME_DEPTH = 20
 _AUTH_RE = re.compile(r"\b(spf|dkim|dmarc)\s*=\s*([a-z]+)", re.I)
 _URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.I)
 _AUTH_MAP = {"pass": "pass", "fail": "fail", "softfail": "fail", "permerror": "fail"}
 
 
-class EmlTooLarge(ValueError):
+class EmlRejected(ValueError):
+    """Input refused before or during parsing (too big / too complex). Maps to HTTP 413/422."""
+
+
+class EmlTooLarge(EmlRejected):
     pass
 
 
+class EmlTooComplex(EmlRejected):
+    pass
+
+
+def _check_structure(msg: StdMessage) -> None:
+    stack, parts = [(msg, 0)], 0
+    while stack:
+        part, depth = stack.pop()
+        parts += 1
+        if depth > MAX_MIME_DEPTH or parts > MAX_MIME_PARTS:
+            raise EmlTooComplex(f"MIME tree exceeds depth {MAX_MIME_DEPTH} or {MAX_MIME_PARTS} parts")
+        if part.is_multipart():
+            stack.extend((p, depth + 1) for p in part.get_payload())
+
+
+def _header_anomalies(msg: StdMessage) -> list[str]:
+    out = []
+    froms = msg.get_all("From", [])
+    if len(froms) > 1:
+        out.append(f"{len(froms)} From headers")
+    if froms and len(getaddresses([str(f) for f in froms])) > 1:
+        out.append("From header lists several addresses")
+    for h in ("From", "Subject", "Reply-To"):
+        v = str(msg.get(h, ""))
+        if "\r" in v or "\n" in v:
+            out.append(f"line break inside decoded {h} header")
+    return out
+
+
+_HIDDEN_STYLE = re.compile(
+    r"display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?![.\d]*[1-9])|opacity\s*:\s*0(?![.\d]*[1-9])"
+    r"|max-height\s*:\s*0|color\s*:\s*(#fff(fff)?|white)\b",
+    re.I,
+)
+_VOID = {"br", "img", "hr", "meta", "link", "input", "wbr", "source", "area", "col", "base"}
+
+
 class _HTMLText(HTMLParser):
+    """Visible text, hidden text (CSS-hidden elements) and anchors. Hidden text is a classic
+    carrier for instructions aimed at an LLM: the human never sees it, the model does."""
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.text: list[str] = []
+        self.hidden: list[str] = []
         self.links: list[DisplayedLink] = []
         self._href: str | None = None
         self._anchor: list[str] = []
         self._skip = 0
+        self._stack: list[tuple[str, bool]] = []
 
     def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag not in _VOID and len(self._stack) < 500:
+            hide = "hidden" in a or a.get("aria-hidden") == "true" or bool(_HIDDEN_STYLE.search(a.get("style") or ""))
+            self._stack.append((tag, hide))
         if tag in ("script", "style"):
             self._skip += 1
         elif tag == "a":
@@ -49,6 +101,10 @@ class _HTMLText(HTMLParser):
             self.text.append("\n")
 
     def handle_endtag(self, tag):
+        for i in range(len(self._stack) - 1, -1, -1):
+            if self._stack[i][0] == tag:
+                del self._stack[i:]
+                break
         if tag in ("script", "style") and self._skip:
             self._skip -= 1
         elif tag == "a" and self._href is not None:
@@ -58,6 +114,9 @@ class _HTMLText(HTMLParser):
 
     def handle_data(self, data):
         if self._skip:
+            return
+        if any(h for _, h in self._stack):
+            self.hidden.append(data)
             return
         self.text.append(data)
         if self._href is not None:
@@ -100,13 +159,25 @@ def _date(msg: StdMessage) -> datetime:
 
 def parse_eml(raw: bytes | str, trusted_authserv_id: str | None = None) -> EmailMessage:
     if isinstance(raw, str):
-        raw = raw.encode("utf-8", "surrogateescape")
+        raw = raw.encode("utf-8", "surrogatepass")  # lone surrogates become invalid bytes, not a crash
     if len(raw) > MAX_RAW_BYTES:
         raise EmlTooLarge(f"message is {len(raw)} bytes; limit {MAX_RAW_BYTES}")
-    msg: StdMessage = message_from_bytes(raw, policy=policy.default)  # type: ignore[assignment]
+    # Cheap pre-check: every multipart needs a boundary parameter.
+    if raw.lower().count(b"boundary=") > MAX_MIME_PARTS:
+        raise EmlTooComplex("too many MIME boundaries")
+    try:
+        msg: StdMessage = message_from_bytes(raw, policy=policy.default)  # type: ignore[assignment]
+        _check_structure(msg)
+        return _to_email(msg, raw, trusted_authserv_id)
+    except RecursionError:
+        raise EmlTooComplex("MIME structure too deeply nested") from None
+
+
+def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> EmailMessage:
 
     plain: list[str] = []
     html_text: list[str] = []
+    hidden: list[str] = []
     pairs: list[DisplayedLink] = []
     atts: list[Attachment] = []
     for part in msg.walk():
@@ -130,9 +201,15 @@ def parse_eml(raw: bytes | str, trusted_authserv_id: str | None = None) -> Email
             p = _HTMLText()
             p.feed(content)
             html_text.append("".join(p.text))
+            hidden.append(" ".join(p.hidden))
             pairs.extend(p.links)
 
     body = "\n".join(plain) if plain else "\n".join(html_text)
+    if plain and html_text:
+        # A crafted mail can show one thing in HTML and another in text/plain; read both.
+        html_only = "\n".join(html_text)
+        if not set(html_only.lower().split()) <= set(body.lower().split()):
+            body += "\n[html part]\n" + html_only
     links = [lp.href for lp in pairs if lp.href.lower().startswith(("http://", "https://"))]
     for u in _URL_RE.findall("\n".join(plain)):
         if u not in links:
@@ -160,4 +237,6 @@ def parse_eml(raw: bytes | str, trusted_authserv_id: str | None = None) -> Email
         spf=auth["spf"],
         dkim=auth["dkim"],
         dmarc=auth["dmarc"],
+        hidden_text=" ".join(" ".join(hidden).split())[:5000],
+        header_anomalies=[a[:200] for a in _header_anomalies(msg)][:10],
     )

@@ -25,7 +25,7 @@ from typing import Any
 from .audit import AuditLog
 from .executor import Executor, _issue_grant
 from .mfa import MFAChannel, StderrChannel
-from .policy import ActionType, parse_action_type, requires_mfa
+from .policy import ActionType, normalize_user, parse_action_type, requires_mfa
 from .totp import TOTPManager
 
 
@@ -133,6 +133,7 @@ class MFAGateway:
     # -- public API ---------------------------------------------------------
     def submit(self, action_type: str, params: dict[str, Any], requested_by: str, reason: str = "") -> SubmitResult:
         action = parse_action_type(action_type)  # raises UnknownActionError (default deny)
+        requested_by = normalize_user(requested_by)
         digest = action_digest(action, params, requested_by)
         if not requires_mfa(action, params, reason):
             self.audit.record("action_executed", action=action.value, digest=digest, by=requested_by, mfa=False)

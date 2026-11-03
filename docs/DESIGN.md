@@ -64,3 +64,32 @@ The data is four small tables (pending actions, audit, TOTP, lockouts) and the q
 
 **21. What is the hybrid mode for?**
 Cost. Rules cost nothing and decide the clear cases. The LLM is only called when the rule score is in the gray zone (30-70), so spending follows the share of ambiguous mail, not total volume. `evaluate.py` reports accuracy, precision, recall, F1, latency, LLM call rate and cost per 1000 mails for `rules`, `llm` and `hybrid`. Prices are CLI inputs, not hard-coded, and the LLM modes only run with `ANTHROPIC_API_KEY`; CI runs `rules` only. On the synthetic set, 16.7% of mail is in the gray zone and all 16 rule misses are in it.
+
+## Red team and self-improvement (round 3)
+
+**22. How does the red team decide that an attack "failed"?**
+Not by status codes alone. After every payload the runner checks invariants with oracles that see inside the system: the executor ledger (any money/account action without an approval the runner made itself is a bypass), a wrapper around the SQLite connection that records every statement (each one must be a string literal from `store.py`, so attacker text can never have become SQL), `PRAGMA integrity_check` plus the table list and audit chain, response headers, files in the sandbox directory, and `/health`. The model in the loop is deliberately compromised: it obeys the mail and calls money tools. A breach means an invariant broke; a detection miss is tracked separately.
+
+**23. Why both Docker and in-process modes?**
+Docker answers "what can an attacker reach over the network from a separate box": the API container is non-root, read-only, capability-free, resource-limited and on an `internal` network without egress (checked from inside the container). In-process answers "did anything bad happen inside", because only there can the oracles read the ledger and wrap the database. pytest uses in-process so CI needs no Docker. Both modes ran with the same totals.
+
+**24. Which finding mattered most?**
+Deeply nested params. The content-based MFA escalation walked params only 6 levels deep and treated "couldn't look" as "nothing there", so `send_reply` with an IBAN 8 levels down executed without MFA. The fix flips the default: anything the policy can't fully inspect requires MFA, and the API rejects such bodies early. The general lesson: every limit in a security check must fail closed.
+
+**25. Why normalize user identities in the gateway?**
+`requested_by` is a string. "Alice" and "alice" were different users, so the capitalized one had no TOTP enrollment and fell back to the development code channel, and it had its own lockout counter. Identities are now NFKC-normalized, casefolded and stripped of zero-width and bidi characters in one function used by the gateway and the TOTP store.
+
+**26. How do you know the SQL is parameterized, not just believe it?**
+Code review says every query uses `?` placeholders. The red team proves it at run time: the recorder logs the SQL text of every `execute`, and the oracle requires each to be exactly one of the literals parsed out of `store.py` with `ast`. If anyone ever builds SQL with an f-string, the injected statement isn't in that set and the oracle fails, whether or not the injection "worked".
+
+**27. Why can't improve.py change the MFA gateway, even if a human would approve?**
+Because its inputs are attacker-influenced (missed phishing, mutated attacks, optional LLM output). A poisoned input could steer a "fix" that weakens the gate, and a human reviewing a long diff can miss one changed comparison. So the boundary is in code: `check_patch` refuses any diff naming a protected path (normalizing `..`, case and diff prefixes, handling renames and binary diffs), and refuses diffs it can't parse. Changes to the gateway are still possible, but only written by a person. improve.py also never applies anything; tests check that a run leaves every source file byte-identical.
+
+**28. How is the $2 LLM cap made hard?**
+Each call is checked before it is sent, against its worst case: input bytes (a token is never fewer than one byte) plus the full `max_tokens`. Actual usage is charged after; if a provider ever bills more than the bound, the loop stops. `--budget` can only lower the $2 ceiling, and without explicit prices the LLM step doesn't run, because a dollar cap can't be enforced against unknown prices.
+
+**29. What did self-improvement teach about itself?**
+On the synthetic data, the top "phrases common to misses" included "it's sarah" and "it's david": names from the generator's templates. A tool that auto-merged that rule would have overfitted to the test data. The proposal shows the evidence and the simulated effect (7 of 18 misses rescued, 0 legitimate samples matched), and a human has to judge whether the phrases are real signal.
+
+**30. Why ship the public-dataset script without results?**
+The build environment's network policy blocks both corpus hosts. The script, loader and comparison table are tested offline with a mocked download. The README states the expected direction of the synthetic-vs-real gap and marks it as unmeasured, rather than inventing numbers.

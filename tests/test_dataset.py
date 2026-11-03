@@ -85,4 +85,4 @@ def test_cli_skips_llm_modes_without_key(monkeypatch, capsys):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     main(["--n", "5", "--modes", "rules,llm,hybrid"])
     out = capsys.readouterr().out
-    assert "| rules |" in out and out.count("skipped: ANTHROPIC_API_KEY not set") == 2
+    assert out.count("skipped: ANTHROPIC_API_KEY not set") == 2 and "| synthetic | rules |" in out

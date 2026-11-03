@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 LOG=$(mktemp)
 DB=$(mktemp -u).db
 KEY=demo-$(python -c 'import secrets;print(secrets.token_hex(8))')
-PHISHGUARD_LLM_MODE=mock PHISHGUARD_MFA_TIMEOUT=3 PHISHGUARD_API_KEYS=$KEY PHISHGUARD_DB_PATH=$DB \
+PHISHGUARD_LLM_MODE=mock PHISHGUARD_MFA_TIMEOUT=3 PHISHGUARD_API_KEYS=$KEY PHISHGUARD_ADMIN_KEYS=$KEY PHISHGUARD_DB_PATH=$DB \
   python -m uvicorn phishguard.api:get_app --factory --port 8765 --log-level warning 2>"$LOG" &
 PID=$!
 trap 'kill $PID 2>/dev/null; rm -f "$LOG" "$DB"*' EXIT

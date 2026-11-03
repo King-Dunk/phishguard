@@ -1,0 +1,64 @@
+category: evasion
+description: >
+  Phishing written to slip past the rules. Expected: risk >= 50. Misses here are quality gaps, not breaches;
+  redteam/improve.py collects them and drafts rule proposals for a human.
+attacks:
+  - id: ev-cyrillic-sender
+    title: Cyrillic homoglyph sender domain (UTF-8 header)
+    kind: eml
+    eml: {from: "Payroll <payroll@асme-corp.com>", text: "Please confirm your salary account before Friday."}
+    expect: {min_risk: 50, features_any: [homoglyph_domain]}
+  - id: ev-punycode-link
+    title: Punycode look-alike in a link
+    kind: eml
+    eml: {html: '<a href="https://xn--cme-corp-06g.com/login">Sign in to the HR portal</a>', text: "Your password expires today, sign in."}
+    expect: {min_risk: 50}
+  - id: ev-split-words
+    title: Spaced-out keywords "w i r e  t r a n s f e r"
+    kind: eml
+    eml: {from: "David Chen <d.chen.office@gmail.com>", text: "u r g e n t: please w i r e the payment today, k e e p  this c o n f i d e n t i a l."}
+    expect: {min_risk: 50}
+  - id: ev-leet
+    title: Leetspeak "upd@te b@nk det@ils"
+    kind: eml
+    eml: {from: "Northwind AR <ar@northwind-billing.example>", text: "Ple@se upd@te our b@nk det@ils, new b@nk @ccount for the inv0ice payment is below."}
+    expect: {min_risk: 50}
+  - id: ev-cyrillic-display-name
+    title: Cyrillic "Асme Corp Payroll" display name from Gmail
+    kind: eml
+    eml: {from: "Асme Corp Payroll <acme.payroll.team@gmail.com>", text: "Your payslip is ready, verify your account to view it."}
+    expect: {min_risk: 50, features_any: [display_name_spoof]}
+  - id: ev-image-only
+    title: Text only in an image ("see attached for payment instructions")
+    kind: eml
+    eml:
+      from: "Accounts Payable <ap.dept.acme@gmail.com>"
+      text: "Please see the attached image for this week's instructions."
+      attachments: [{name: "instructions.png", ctype: image/png, content: "PNG"}]
+    expect: {min_risk: 50}
+  - id: ev-polite-bec-remittance
+    title: Polite BEC asking to update remittance details
+    kind: eml
+    eml:
+      from: "David Chen <david.chen.acme@gmail.com>"
+      text: "Hi Anna, hope your week is going well! Small favour: could you update the remittance details we hold for Northwind before Friday's run? I'll forward the new ones shortly. Thanks so much, David"
+    expect: {min_risk: 50}
+  - id: ev-polite-bec-giftcards
+    title: Polite BEC asking for "Apple cards"
+    kind: eml
+    eml:
+      from: "David Chen <ceo.dchen@outlook.com>"
+      text: "Are you at your desk? I need a quick favour for a client appreciation, could you pick up a few Apple cards this afternoon? I'll reimburse you."
+    expect: {min_risk: 50}
+  - id: ev-polite-bec-payroll
+    title: Polite payroll redirect
+    kind: eml
+    eml:
+      from: "Maria G <maria.g.acme@gmail.com>"
+      text: "Hello HR team, I recently switched to a new bank. Could you kindly direct my next salary deposit to the account below? Many thanks, Maria"
+    expect: {min_risk: 50}
+  - id: ev-zero-width-name
+    title: Zero-width chars in executive display name
+    kind: eml
+    eml: {from: "Dav​id Ch‌en <office.dc@gmail.com>", text: "Wire the payment today please."}
+    expect: {min_risk: 50, features_any: [executive_impersonation]}

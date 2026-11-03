@@ -4,6 +4,12 @@
     python -m phishguard.dataset.evaluate --modes rules,llm,hybrid \\
         --price-in <USD per MTok> --price-out <USD per MTok>                      # needs ANTHROPIC_API_KEY
 
+Datasets (--dataset):
+- synthetic (default): seeded generator, same assumptions as the rules (a regression baseline)
+- external: public corpora in data/external/ (scripts/download_datasets.py): SpamAssassin
+            easy_ham/hard_ham as legitimate, Nazario phishing corpus as phishing
+- both:     run both and print them side by side
+
 Modes:
 - rules:  deterministic features + weighted noisy-OR score. No LLM, zero cost.
 - llm:    the full agent (LLM with read-only tools) on every email.
@@ -43,10 +49,25 @@ def evaluate(
     gray_zone: tuple[float, float] = (30.0, 70.0),
     price_in: float | None = None,
     price_out: float | None = None,
+    dataset: str = "synthetic",
+    data_dir: str | None = None,
+    limit_per_class: int | None = None,
 ) -> dict:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
-    ctx = DetectionContext(trusted_domains=TRUSTED_DOMAINS, executives=EXECUTIVES)
+    skipped: dict[str, int] = {}
+    if dataset == "external":
+        from .external import load_external
+
+        ext = load_external(data_dir, limit_per_class, seed)
+        data, categories, skipped = ext.items, ext.categories, ext.skipped
+        # The corpora are not about our company: no trusted domains or executives to imitate.
+        ctx = DetectionContext(trusted_domains=(), executives=())
+    elif dataset == "synthetic":
+        data, categories = generate_dataset(n_per_category, seed), CATEGORIES
+        ctx = DetectionContext(trusted_domains=TRUSTED_DOMAINS, executives=EXECUTIVES)
+    else:
+        raise ValueError("dataset must be synthetic or external")
     agent = None
     if mode != "rules":
         if llm is None:
@@ -57,8 +78,7 @@ def evaluate(
 
     tp = fp = tn = fn = calls = in_tok = out_tok = 0
     latency = 0.0
-    per_cat = {c: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for c in CATEGORIES}
-    data = generate_dataset(n_per_category, seed)
+    per_cat = {c: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for c in categories}
     for it in data:
         t0 = time.perf_counter()
         risk, _ = analyze_email(it.email, ctx)
@@ -88,6 +108,8 @@ def evaluate(
         cost = None
     return {
         "mode": mode,
+        "dataset": dataset,
+        "skipped": skipped,
         "seed": seed,
         "n_per_category": n_per_category,
         "threshold": threshold,
@@ -119,28 +141,43 @@ def _pct(x: float | None) -> str:
 
 def comparison_table(results: list[dict]) -> str:
     rows = [
-        "| Mode | Accuracy | Precision | Recall | F1 | Avg latency | LLM call rate | Cost / 1k emails |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Dataset | Mode | Accuracy | Precision | Recall | F1 | Avg latency | LLM call rate | Cost / 1k emails |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
-        if r.get("skipped"):
-            rows.append(f"| {r['mode']} | skipped: {r['skipped']} | | | | | | |")
+        ds = r.get("dataset", "synthetic")
+        if r.get("not_run"):
+            rows.append(f"| {ds} | {r['mode']} | skipped: {r['not_run']} | | | | | | |")
             continue
         cost = "n/a (pass --price-in/--price-out)" if r["cost_per_1k_usd"] is None else f"${r['cost_per_1k_usd']}"
         rows.append(
-            f"| {r['mode']} | {_pct(r['accuracy'])} | {_pct(r['precision'])} | {_pct(r['recall'])} | "
+            f"| {ds} | {r['mode']} | {_pct(r['accuracy'])} | {_pct(r['precision'])} | {_pct(r['recall'])} | "
             f"{_pct(r['f1'])} | {r['avg_latency_ms']} ms | {_pct(r['llm_call_rate'])} | {cost} |"
         )
     return "\n".join(rows)
 
 
-def run_modes(modes: list[str], **kw) -> list[dict]:
-    out = []
-    for m in modes:
-        if m != "rules" and kw.get("llm") is None and not os.environ.get("ANTHROPIC_API_KEY"):
-            out.append({"mode": m, "skipped": "ANTHROPIC_API_KEY not set"})
+def confusion_table(results: list[dict]) -> str:
+    rows = ["| Dataset | Mode | Category | TP | FP | TN | FN | Recall | FPR |", "|---|---|---|---|---|---|---|---|---|"]
+    for r in results:
+        if r.get("not_run"):
             continue
-        out.append(evaluate(mode=m, **kw))
+        for cat, v in r["per_category"].items():
+            rows.append(
+                f"| {r['dataset']} | {r['mode']} | {cat} | {v['tp']} | {v['fp']} | {v['tn']} | {v['fn']} | "
+                f"{_pct(v['recall'])} | {_pct(v['false_positive_rate'])} |"
+            )
+    return "\n".join(rows)
+
+
+def run_modes(modes: list[str], datasets: tuple[str, ...] = ("synthetic",), **kw) -> list[dict]:
+    out = []
+    for ds in datasets:
+        for m in modes:
+            if m != "rules" and kw.get("llm") is None and not os.environ.get("ANTHROPIC_API_KEY"):
+                out.append({"mode": m, "dataset": ds, "not_run": "ANTHROPIC_API_KEY not set"})
+                continue
+            out.append(evaluate(mode=m, dataset=ds, **kw))
     return out
 
 
@@ -154,14 +191,29 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--gray-high", type=float, default=70.0)
     ap.add_argument("--price-in", type=float, default=None, help="USD per million input tokens")
     ap.add_argument("--price-out", type=float, default=None, help="USD per million output tokens")
+    ap.add_argument("--dataset", choices=["synthetic", "external", "both"], default="synthetic")
+    ap.add_argument("--data-dir", default=None, help="default: data/external")
+    ap.add_argument("--limit", type=int, default=None, help="external: max messages per class (sampled)")
     ap.add_argument("--json", action="store_true", help="print full JSON instead of the table")
     a = ap.parse_args(argv)
     modes = [m.strip() for m in a.modes.split(",") if m.strip()]
     bad = set(modes) - set(MODES)
     if bad:
         ap.error(f"unknown modes: {sorted(bad)}")
+    datasets = ("synthetic", "external") if a.dataset == "both" else (a.dataset,)
+    if "external" in datasets:
+        from .external import ExternalDataMissing, load_external
+
+        try:
+            load_external(a.data_dir, 1)
+        except ExternalDataMissing as e:
+            print(f"external dataset not available: {e}")
+            raise SystemExit(2) from None
     results = run_modes(
         modes,
+        datasets,
+        data_dir=a.data_dir,
+        limit_per_class=a.limit,
         n_per_category=a.n,
         seed=a.seed,
         threshold=a.threshold,
@@ -169,7 +221,15 @@ def main(argv: list[str] | None = None) -> None:
         price_in=a.price_in,
         price_out=a.price_out,
     )
-    print(json.dumps(results, indent=2) if a.json else comparison_table(results))
+    if a.json:
+        print(json.dumps(results, indent=2))
+        return
+    print(comparison_table(results))
+    print()
+    print(confusion_table(results))
+    for r in results:
+        if r.get("skipped"):
+            print(f"\n{r['dataset']}: skipped unparseable/oversized messages: {r['skipped']}")
 
 
 if __name__ == "__main__":

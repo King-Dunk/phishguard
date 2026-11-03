@@ -36,6 +36,9 @@ class Settings:
     mfa_lockout_threshold: int = 5
     mfa_lockout_seconds: int = 900
     trusted_authserv_id: str | None = None  # only trust Authentication-Results stamped by this MTA
+    admin_keys: tuple[str, ...] = field(default=(), repr=False)  # may call /mfa/enroll
+    open_enrollment: bool = True  # dataclass default is for tests; from_env() requires an admin key
+    max_body_bytes: int = 3_000_000
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -58,4 +61,7 @@ class Settings:
             mfa_lockout_threshold=int(os.environ.get("PHISHGUARD_MFA_LOCKOUT_THRESHOLD", "5")),
             mfa_lockout_seconds=int(os.environ.get("PHISHGUARD_MFA_LOCKOUT_SECONDS", "900")),
             trusted_authserv_id=os.environ.get("PHISHGUARD_AUTHSERV_ID") or None,
+            admin_keys=tuple(k.strip() for k in os.environ.get("PHISHGUARD_ADMIN_KEYS", "").split(",") if k.strip()),
+            open_enrollment=os.environ.get("PHISHGUARD_OPEN_ENROLLMENT") == "1",
+            max_body_bytes=int(os.environ.get("PHISHGUARD_MAX_BODY_BYTES", "3000000")),
         )
