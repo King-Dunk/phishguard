@@ -127,3 +127,17 @@ def test_link_text_same_site_is_fine():
     pairs = [DisplayedLink(text="Click here", href="https://evil.example")]
     _, f = analyze_email(make_email(link_pairs=pairs))
     assert "link_text_mismatch" not in {x.name for x in f}  # plain words are not a URL claim
+
+
+def test_empty_group_to_header_does_not_crash():
+    # Real-world shape (Nazario corpus): empty group with trailing comment.
+    # The stdlib header registry raised AttributeError -> 500 on /analyze.
+    from phishguard.readonly.eml import parse_eml as _parse
+
+    raw = (
+        b"From: Bank <alert@examp1e.com>\r\n"
+        b"To: unlisted-recipients:; (no To-header on input)\r\n"
+        b"Subject: verify\r\n\r\nplease verify\r\n"
+    )
+    e = _parse(raw)
+    assert e.sender_email == "alert@examp1e.com"

@@ -48,8 +48,14 @@ def load_external(data_dir: str | pathlib.Path | None = None, limit_per_class: i
         if p.is_file() and not p.name.startswith(("cmds", ".")):
             raw.append((p.read_bytes(), _ham_category(p, ham_root), 0))
     for mb in sorted(phish_root.glob("*.mbox")):
-        for msg in mailbox.mbox(str(mb)):
-            raw.append((msg.as_bytes(), "nazario_phish", 1))
+        # Use the raw stored bytes: re-serialising with as_bytes() crashes on
+        # real-world messages carrying non-ASCII in headers or MIME parts.
+        box = mailbox.mbox(str(mb), create=False)
+        try:
+            for key in box.iterkeys():
+                raw.append((box.get_bytes(key), "nazario_phish", 1))
+        finally:
+            box.close()
     rng = random.Random(seed)
     if limit_per_class:
         by_label: dict[int, list] = {0: [], 1: []}
