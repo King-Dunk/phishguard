@@ -3,6 +3,7 @@
 import hashlib
 import pathlib
 import subprocess
+import sys
 
 import pytest
 
@@ -87,7 +88,7 @@ def test_run_writes_only_proposals_and_changes_no_code(proposal):
 def test_generated_patch_is_checked_and_applies_cleanly(proposal):
     _, out, _ = proposal
     patch = (out / "20260101.patch").read_text()
-    assert check_patch(patch) == {"phishguard/readonly/features.py"}
+    assert check_patch(patch) == {"phishguard/readonly/features.py", "phishguard/readonly/weights.yaml"}
     r = subprocess.run(
         ["git", "apply", "--check", str(out / "20260101.patch")], cwd=ROOT, capture_output=True, text=True
     )
@@ -157,3 +158,24 @@ def test_overbilling_stops_immediately(tmp_path):
     llm = LyingLLM()
     improve.run_improve(tmp_path, date="20260105", use_llm=True, price_in=0.01, price_out=0.01, llm=llm)
     assert llm.calls == 1 and "Stopped" in (tmp_path / "20260105.md").read_text()
+
+
+def test_generated_patch_produces_a_working_detector(proposal, tmp_path):
+    """Apply the proposal to a scratch copy and check the new feature really scores (no missing weight)."""
+    import shutil
+
+    _, out, _ = proposal
+    work = tmp_path / "repo"
+    shutil.copytree(ROOT / "phishguard", work / "phishguard")
+    r = subprocess.run(["git", "apply", str(out / "20260101.patch")], cwd=work, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    code = (
+        "from phishguard.readonly.features import extract_features, DetectionContext, DEFAULT_WEIGHTS\n"
+        "from tests.conftest import make_email\n"
+        "assert DEFAULT_WEIGHTS.weights['soft_bec_phrasing'] > 0\n"
+        "f = extract_features(make_email(body='Hi, it\\'s sarah. Keep this between us for now.'), DetectionContext())\n"
+        "assert 'soft_bec_phrasing' in {x.name for x in f}, [x.name for x in f]\n"
+    )
+    shutil.copytree(ROOT / "tests", work / "tests", ignore=shutil.ignore_patterns("fixtures"))
+    r = subprocess.run([sys.executable, "-c", code], cwd=work, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

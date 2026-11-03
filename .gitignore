@@ -16,3 +16,4 @@ build/
 *.db-shm
 data/external/
 redteam/out/
+weights.suggested.yaml

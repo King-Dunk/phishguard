@@ -51,6 +51,14 @@ def _check_structure(msg: StdMessage) -> None:
             stack.extend((p, depth + 1) for p in part.get_payload())
 
 
+def is_list_mail(msg: StdMessage) -> bool:
+    """Mailing-list / bulk mail by RFC 2369/2919 headers or Precedence. Sender-controlled, so callers
+    may only use it to soften signals that lists legitimately trigger."""
+    if any(msg.get(h) is not None for h in ("List-Id", "List-Unsubscribe", "List-Post", "Mailing-List")):
+        return True
+    return str(msg.get("Precedence", "")).strip().lower() in ("list", "bulk", "junk")
+
+
 def _header_anomalies(msg: StdMessage) -> list[str]:
     out = []
     froms = msg.get_all("From", [])
@@ -243,4 +251,5 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
         dmarc=auth["dmarc"],
         hidden_text=" ".join(" ".join(hidden).split())[:5000],
         header_anomalies=[a[:200] for a in _header_anomalies(msg)][:10],
+        list_mail=is_list_mail(msg),
     )

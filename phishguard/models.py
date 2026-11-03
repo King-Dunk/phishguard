@@ -45,6 +45,7 @@ class EmailMessage(BaseModel):
     attachments: list[FileName] = Field(default_factory=list, max_length=50)
     attachment_meta: list[Attachment] = Field(default_factory=list, max_length=50)
     link_pairs: list[DisplayedLink] = Field(default_factory=list, max_length=100)
+    list_mail: bool = False  # List-Id / List-Unsubscribe / List-Post / Precedence: list|bulk|junk
     hidden_text: str = Field(default="", max_length=5000)  # CSS-hidden HTML text
     header_anomalies: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
     sender_reputation: float | None = Field(default=None, ge=0, le=1)

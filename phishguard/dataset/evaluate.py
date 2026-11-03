@@ -52,20 +52,24 @@ def evaluate(
     dataset: str = "synthetic",
     data_dir: str | None = None,
     limit_per_class: int | None = None,
+    split: str | None = None,
+    weights=None,
 ) -> dict:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
     skipped: dict[str, int] = {}
     if dataset == "external":
-        from .external import load_external
+        from .external import load_external_cached, split_items
 
-        ext = load_external(data_dir, limit_per_class, seed)
+        ext = load_external_cached(data_dir, limit_per_class, seed)
         data, categories, skipped = ext.items, ext.categories, ext.skipped
+        if split:
+            data = split_items(data, split)
         # The corpora are not about our company: no trusted domains or executives to imitate.
-        ctx = DetectionContext(trusted_domains=(), executives=())
+        ctx = DetectionContext(trusted_domains=(), executives=(), weights=weights)
     elif dataset == "synthetic":
         data, categories = generate_dataset(n_per_category, seed), CATEGORIES
-        ctx = DetectionContext(trusted_domains=TRUSTED_DOMAINS, executives=EXECUTIVES)
+        ctx = DetectionContext(trusted_domains=TRUSTED_DOMAINS, executives=EXECUTIVES, weights=weights)
     else:
         raise ValueError("dataset must be synthetic or external")
     agent = None
@@ -108,7 +112,7 @@ def evaluate(
         cost = None
     return {
         "mode": mode,
-        "dataset": dataset,
+        "dataset": f"{dataset}:{split}" if split else dataset,
         "skipped": skipped,
         "seed": seed,
         "n_per_category": n_per_category,
@@ -170,14 +174,19 @@ def confusion_table(results: list[dict]) -> str:
     return "\n".join(rows)
 
 
-def run_modes(modes: list[str], datasets: tuple[str, ...] = ("synthetic",), **kw) -> list[dict]:
+def run_modes(modes: list[str], datasets: tuple[str, ...] = ("synthetic",), split: bool = False, **kw) -> list[dict]:
+    """With split=True, external data is reported as two rows: dev (70%) and test (30%).
+    Tune on dev; quote only test."""
     out = []
     for ds in datasets:
-        for m in modes:
-            if m != "rules" and kw.get("llm") is None and not os.environ.get("ANTHROPIC_API_KEY"):
-                out.append({"mode": m, "dataset": ds, "not_run": "ANTHROPIC_API_KEY not set"})
-                continue
-            out.append(evaluate(mode=m, dataset=ds, **kw))
+        parts = ("dev", "test") if split and ds == "external" else (None,)
+        for part in parts:
+            for m in modes:
+                label = f"{ds}:{part}" if part else ds
+                if m != "rules" and kw.get("llm") is None and not os.environ.get("ANTHROPIC_API_KEY"):
+                    out.append({"mode": m, "dataset": label, "not_run": "ANTHROPIC_API_KEY not set"})
+                    continue
+                out.append(evaluate(mode=m, dataset=ds, split=part, **kw))
     return out
 
 
@@ -194,6 +203,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--dataset", choices=["synthetic", "external", "both"], default="synthetic")
     ap.add_argument("--data-dir", default=None, help="default: data/external")
     ap.add_argument("--limit", type=int, default=None, help="external: max messages per class (sampled)")
+    ap.add_argument(
+        "--split",
+        action="store_true",
+        help="external: report dev (70%%) and test (30%%) separately; split is a fixed salted content hash",
+    )
+    ap.add_argument("--weights", default=None, help="alternative weights.yaml (e.g. a calibration suggestion)")
     ap.add_argument("--json", action="store_true", help="print full JSON instead of the table")
     a = ap.parse_args(argv)
     modes = [m.strip() for m in a.modes.split(",") if m.strip()]
@@ -209,9 +224,16 @@ def main(argv: list[str] | None = None) -> None:
         except ExternalDataMissing as e:
             print(f"external dataset not available: {e}")
             raise SystemExit(2) from None
+    weights = None
+    if a.weights:
+        from ..readonly.features import load_weights
+
+        weights = load_weights(a.weights)
     results = run_modes(
         modes,
         datasets,
+        split=a.split,
+        weights=weights,
         data_dir=a.data_dir,
         limit_per_class=a.limit,
         n_per_category=a.n,

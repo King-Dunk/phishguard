@@ -143,6 +143,7 @@ Real output of `bash examples/run_demo.sh` (MockLLM, API key auth on, SQLite per
 pip install -r requirements.txt
 python -m pytest                                          # MockLLM only, no network
 python -m phishguard.dataset.evaluate --n 200 --seed 42   # rules-mode comparison table
+python scripts/calibrate.py --help                        # real-corpus weight calibration (dev split only)
 PHISHGUARD_API_KEYS=dev-key uvicorn phishguard.api:get_app --factory --port 8000
 bash examples/run_demo.sh                                 # end-to-end demo
 docker build -t phishguard . && docker run -p 8000:8000 -e PHISHGUARD_API_KEYS=change-me phishguard  # non-root
@@ -234,9 +235,39 @@ python -m phishguard.dataset.evaluate --dataset external --limit 2000 --json
 
 Redistribution terms are set by each publisher (check the source pages), so raw mail is **never committed**: `data/external/` is in `.gitignore` and `.dockerignore`. Neither project publishes checksums, so the script uses trust-on-first-use: it records each file's SHA-256 in `data/external/checksums.json` and refuses a changed file later (`--expect-sha256 NAME=HEX` pins a known hash). Archives are extracted by `safe_extract()`, which rejects absolute paths, `..`, links and size bombs (the red team tests this too). Messages go through the same `.eml` parser as the API; ones it refuses (e.g. MIME bombs) are counted as skipped and reported, not dropped silently. The output is a P/R/F1 table plus a per-category confusion matrix (`easy_ham`, `hard_ham`, `nazario_phish`).
 
-**Status: not run.** The network policy of the environment this was built in blocks both hosts (HTTP 403 at the proxy), so there are no real-corpus numbers. The pipeline is tested offline with a mocked download and a small fake corpus (`tests/test_external_dataset.py`).
+The download needs network access to both hosts; the cloud environment this repo is built in blocks them, so real-corpus runs happen locally. The pipeline is tested offline with a mocked download and a small fake corpus (`tests/test_external_dataset.py`, `tests/test_calibration.py`).
 
-**Synthetic vs real: expected gap (to be measured, not measured yet).** The rules lean on signals the synthetic set was built around: look-alikes of *our* domains, *our* executives' names, sender reputation and domain age. In the public corpora none of those exist (no company context, reputation and domain age are absent), so most of the score must come from wording, links, attachments and SPF/DKIM/DMARC headers, which old mail often lacks. Expect recall well below the synthetic 94.7% and more false positives on `hard_ham` (marketing mail with urgency and payment words). That gap is the point of running it: it shows how much of the synthetic score comes from shared assumptions.
+### Dev/test protocol (anti-overfitting)
+
+`--split` divides the external data 70/30 into **dev** and **test** by a salted hash of each message's content, so the split is identical on every machine and duplicates can't sit on both sides. All tuning happens on dev: `scripts/error_analysis.py` (aggregate statistics only, safe to commit) and `scripts/calibrate.py` (grid search with an L1 pull toward the hand-set weights, an inner held-out slice, frozen security features, and output to a *suggestion* file that never overwrites `weights.yaml`). **This README reports only test-split numbers**, measured once after the weights are frozen.
+
+```bash
+python scripts/download_datasets.py
+python -m phishguard.dataset.evaluate --dataset external --split                 # dev and test rows; quote test only
+python scripts/error_analysis.py --split dev --out dev_error_analysis.md            # aggregates, no content
+python scripts/calibrate.py --out weights.suggested.yaml                           # dev only, writes a suggestion
+python -m phishguard.dataset.evaluate --dataset external --split --weights weights.suggested.yaml
+```
+
+| Real corpus, **test split** (30%) | Accuracy | Precision | Recall | F1 | FPR easy_ham | FPR hard_ham |
+|---|---|---|---|---|---|---|
+| Weights v2 (this version) | not yet measured | | | | | |
+
+Not yet measured: no cloud run is possible and no local test-split run has been reported. The previous version was measured on the *whole* corpus, not a held-out split (accuracy 64.4%, precision 87.7%, recall 60.0%, F1 71.2%, false-positive rate 22.7% easy_ham / 34.4% hard_ham); that analysis (`docs/real_corpus_error_analysis.md`) drove the changes below and is not a test result.
+
+### What changed from the real-corpus error analysis
+
+Each change and its evidence is in `docs/DESIGN.md` (Q31-Q39). In short:
+
+- The catch-all `suspicious_link` (82.6% of ham vs 84.3% of phish, +23 points each time) is split into specific signals (IP host, shortener, brand on a foreign domain, non-standard port, `@` obfuscation, `data:`/`javascript:`, punycode). The generic "unrelated host" part is weight 0.
+- Reply-To / Return-Path mismatches no longer count within one organization and are softened or ignored on mailing-list mail (`List-Id`, `List-Unsubscribe`, `Precedence: list|bulk`). A reply-to that goes to free mail keeps full weight even on list mail.
+- More attachment signals: broader double extensions, archives, legacy Office files, password hints next to an attachment, image-only lures.
+- Prompt-injection patterns no longer match mailing-list phrases ("you are now subscribed", "as root").
+- All weights live in `phishguard/readonly/weights.yaml`.
+
+**Dataset bias: missing authentication.** The legitimate mail (SpamAssassin, 2002) predates DKIM and DMARC, so 100% of it has no authentication result, while 86.3% of the phishing has none either. In this corpus "no SPF/DKIM/DMARC" mostly encodes the mail's *year*. `no_authentication` is therefore at the minimum weight (0.01), and any real-corpus number should be read with this in mind: a corpus of modern legitimate mail would score differently. Explicit authentication *failures* still count fully.
+
+**Synthetic vs real.** The rules lean on signals the synthetic set was built around: look-alikes of *our* domains, *our* executives' names, sender reputation and domain age. None of those exist in the public corpora, so the score there must come from wording, links, attachments and headers. The gap between the two is the honest measure of how much of the synthetic score comes from shared assumptions. Synthetic F1 is guarded by a test (>= 95%; currently 97.3%).
 
 ## Red Team Results
 

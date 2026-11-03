@@ -1,0 +1,91 @@
+# PhishGuard feature weights. Score = noisy-OR: 100 * (1 - prod(1 - w)) over the features that fire.
+# A weight of 0 disables a feature (it is still extracted for calibration, never scored).
+#
+# Recalibrate on your own labeled mail (dev split only), review, then copy values here by hand:
+#   python scripts/calibrate.py --data-dir data/external --out weights.suggested.yaml
+# Evidence for every change since version 1: docs/DESIGN.md, "Real-corpus calibration" (Q31-Q39),
+# based on docs/real_corpus_error_analysis.md (15,721 real messages, aggregates only).
+version: 2
+
+weights:
+  # --- sender identity -------------------------------------------------------------------
+  homoglyph_domain: 0.60
+  lookalike_domain: 0.55
+  executive_impersonation: 0.40
+  display_name_spoof: 0.40
+  header_anomaly: 0.45
+  # Reply-To / Return-Path. Real corpus: reply_to_mismatch fired on 18.3% of ham vs 7.8% of phish
+  # (75.9% of false positives), return_path_mismatch on 69.2% vs 20.7%; mostly mailing lists.
+  reply_to_freemail: 0.35        # corporate sender, reply goes to gmail/outlook/...: the BEC pattern
+  reply_to_mismatch: 0.20        # other organization, no list headers (was 0.30)
+  reply_to_mismatch_list: 0.03   # same, but List-Id / List-Unsubscribe / Precedence: list|bulk present
+  return_path_mismatch: 0.04     # was 0.12; never fires on list mail (bounce addresses are normal there)
+  # --- authentication -----------------------------------------------------------------------
+  auth_fail: 0.35
+  auth_fail_multi: 0.50          # two or more of SPF/DKIM/DMARC failed
+  # Dataset-era bias: 100% of the 2002 ham and 86.3% of phish have no SPF/DKIM/DMARC result at all.
+  # Absence of authentication says more about the year than about the sender. Minimum weight.
+  no_authentication: 0.01
+  # --- reputation (only when the caller supplies it) -----------------------------------------
+  low_reputation: 0.35
+  moderate_reputation: 0.15
+  new_domain: 0.25
+  young_domain: 0.10
+  # --- content ---------------------------------------------------------------------------------
+  prompt_injection_attempt: 0.50
+  bank_detail_change: 0.45
+  credential_request: 0.30
+  hidden_html_text: 0.30
+  secrecy_request: 0.25
+  obfuscated_text: 0.25
+  urgency_language: 0.20
+  payment_keywords: 0.20
+  off_hours_send: 0.08
+  # --- links -------------------------------------------------------------------------------------
+  # The old catch-all "suspicious_link" (any host unrelated to the sender) fired on 82.6% of ham and
+  # 84.3% of phish while adding ~23 points each time: no information, lots of score. It is now split.
+  link_text_mismatch: 0.45
+  lookalike_link: 0.45           # imitates one of OUR trusted domains (edit distance / homoglyph)
+  link_brand_impersonation: 0.45 # a well-known brand as a token of a host that brand doesn't own
+  link_at_obfuscation: 0.45      # http://paypal.com@evil.example/ - the real host is after the @
+  link_ip_host: 0.40             # IPv4 / IPv6 / decimal-or-hex integer IP
+  link_data_uri: 0.40            # data: or javascript: href
+  link_nonstandard_port: 0.25    # explicit port other than 80/443
+  link_shortener: 0.20
+  link_punycode: 0.20            # xn-- host that is not one of ours
+  unrelated_link_host: 0.0       # the old generic part: kept for calibration, not scored
+  # --- attachments ----------------------------------------------------------------------------------
+  # 18.2% of missed phish carried an attachment that was not flagged.
+  risky_attachment: 0.40         # executable, script, shortcut, disk image, html/svg/one, macro doc, double ext
+  encrypted_attachment_hint: 0.35  # "password: 1234" / "password-protected zip" next to an attachment
+  archive_attachment: 0.20       # zip/rar/7z/gz/...: content the gateway cannot scan
+  office_legacy_attachment: 0.12 # .doc/.xls/.ppt/.rtf: can carry macros, common in old phish
+  image_lure: 0.15               # image attachment and almost no text
+
+# Brands commonly impersonated in phishing links, with the registrable domains they really own.
+# Domain knowledge, not fitted to any dataset. A link host fires link_brand_impersonation when one of
+# its labels (split on '.' and '-') equals a brand token and its registrable domain is not listed.
+brands:
+  paypal: [paypal.com, paypal.me, paypalobjects.com, paypal-communication.com]
+  ebay: [ebay.com, ebay.co.uk, ebay.de, ebay.com.au, ebayimg.com, ebaystatic.com]
+  amazon: [amazon.com, amazon.co.uk, amazon.de, amazonaws.com, amazon.com.au]
+  apple: [apple.com, icloud.com]
+  microsoft: [microsoft.com, live.com, office.com, microsoftonline.com, outlook.com]
+  office365: [office.com, microsoft.com]
+  google: [google.com, googleusercontent.com, gmail.com, google.co.uk]
+  netflix: [netflix.com]
+  chase: [chase.com, jpmorganchase.com]
+  wellsfargo: [wellsfargo.com]
+  bankofamerica: [bankofamerica.com]
+  citibank: [citibank.com, citi.com]
+  hsbc: [hsbc.com, hsbc.co.uk]
+  barclays: [barclays.co.uk, barclays.com]
+  dhl: [dhl.com, dhl.de]
+  fedex: [fedex.com]
+  docusign: [docusign.com, docusign.net]
+  dropbox: [dropbox.com, dropboxusercontent.com]
+  linkedin: [linkedin.com]
+  facebook: [facebook.com, fb.com]
+  instagram: [instagram.com]
+  adobe: [adobe.com]
+  irs: [irs.gov]

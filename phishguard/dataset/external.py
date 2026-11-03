@@ -8,6 +8,8 @@ messages are counted and skipped, never silently relabeled.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import mailbox
 import pathlib
 import random
@@ -77,3 +79,30 @@ def load_external(data_dir: str | pathlib.Path | None = None, limit_per_class: i
     if not out.items:
         raise ExternalDataMissing(f"no messages parsed under {root}")
     return out
+
+
+SPLIT_SEED = 20261103
+DEV_FRACTION = 0.70
+
+
+def split_of(email, seed: int = SPLIT_SEED, dev_fraction: float = DEV_FRACTION) -> str:
+    """'dev' or 'test', from a salted hash of the message content (not its position in the corpus).
+
+    Hashing content means the same message lands in the same split on every machine, whatever
+    the file order or --limit, and exact duplicates (common in phishing corpora) can never sit
+    on both sides, which would leak test answers into calibration.
+    """
+    key = f"{seed}|{email.sender_email}|{email.subject}|{email.body[:4000]}".encode("utf-8", "replace")
+    bucket = int.from_bytes(hashlib.sha256(key).digest()[:8], "big") / 2**64
+    return "dev" if bucket < dev_fraction else "test"
+
+
+def split_items(items: list[LabeledEmail], split: str, seed: int = SPLIT_SEED) -> list[LabeledEmail]:
+    if split not in ("dev", "test"):
+        raise ValueError("split must be 'dev' or 'test'")
+    return [it for it in items if split_of(it.email, seed) == split]
+
+
+@functools.lru_cache(maxsize=4)
+def load_external_cached(data_dir: str | None, limit_per_class: int | None, seed: int) -> ExternalSet:
+    return load_external(data_dir, limit_per_class, seed)
