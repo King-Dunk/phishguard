@@ -258,11 +258,16 @@ python -m phishguard.dataset.evaluate --dataset external --split --sweep --fpr-r
 | Real corpus, **test split** | Recall | Precision | FPR easy_ham | FPR hard_ham |
 |---|---|---|---|---|
 | `weights.yaml` v2, threshold 50 | 35.0% | 98.7% | 0.2% | 21.2% |
-| **`weights.yaml` v2, threshold 35 (default)** | **60.8%** | **97.5%** | **1.4%** | 56.1% |
-| `calibrate.py` suggestion (old F1 objective) | 88.4% | not reported | 38.2% | 83.3% |
+| `weights.yaml` v2, threshold 35 | 60.8% | 97.5% | 1.4% | 56.1% |
+| **`weights.yaml` v3 (FPR-constrained calibration), threshold 35 (default)** | **69.6%** | **98.0%** | **0.9%** | 59.1% |
+| `calibrate.py` suggestion (old F1 objective, rejected) | 88.4% | 86.0% | 38.2% | 83.3% |
 | *Reference: v1 rules, threshold 50, whole corpus (not a held-out split)* | *60.0%* | *87.7%* | *22.7%* | *34.4%* |
 
+**v3** is the output of the FPR-constrained `calibrate.py` (dev split only, `no_authentication`/`off_hours_send` frozen), checked once on the test split: +8.8 points of recall over v2 with *lower* easy_ham FPR (0.9% vs 1.4%). The calibrator raised `reply_to_mismatch` and `return_path_mismatch` (non-list mail), `link_shortener`, `archive_attachment` and `image_lure`. Synthetic F1 at 35 is 96.1%. hard_ham remains the weak spot (59.1%), which is what the hybrid step targets.
+
 Compared with v1 (threshold 50), v2 at threshold 35 keeps the same recall (60.8% vs 60.0%) while easy_ham false positives fall from 22.7% to 1.4%. hard_ham (legitimate, marketing-like mail) got worse at 35 (56.1% vs 34.4%). The v1 row comes from a different evaluation set (whole corpus), so treat that comparison as indicative only. This round added `urgency_language_trusted_sender`/`payment_keywords_trusted_sender` damping. It only applies when trusted domains are configured, so it is inert on the public corpora, and the v2 numbers above still describe this version.
+
+**Trade-off: compromised internal mailboxes.** When trusted domains are configured, keyword-only signals (urgency, payment words) are damped for authenticated mail from those domains, which cut false positives on legitimate supplier invoice reminders. The cost: 13 of 200 synthetic BEC mails sent from a *compromised internal mailbox* (authenticated, trusted domain) are no longer flagged. This is deliberate defense in depth: detection is tuned for a usable false-positive rate, and the payment itself still cannot happen without the hard-coded MFA gateway, which does not depend on the detection score.
 
 **Why the default threshold is 35.** At 50, v2 is very precise (98.7%) but misses 65% of phishing. At 35, recall rises by 25.8 points for +1.2 points of easy_ham FPR and -1.2 points of precision. The price is hard_ham: more than half of marketing-like legitimate mail is flagged. For a phishing filter a missed phish (credential theft, payment fraud) costs far more than a newsletter in quarantine, so 35 is the default. The 20-50 band, where hard_ham and missed phishing overlap, is exactly what the planned hybrid step hands to an LLM (Roadmap). Deployments with a lot of bulk mail and no hybrid step can set `PHISHGUARD_THRESHOLD=50`.
 

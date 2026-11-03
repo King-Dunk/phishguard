@@ -17,9 +17,9 @@ weights:
   # Reply-To / Return-Path. Real corpus: reply_to_mismatch fired on 18.3% of ham vs 7.8% of phish
   # (75.9% of false positives), return_path_mismatch on 69.2% vs 20.7%; mostly mailing lists.
   reply_to_freemail: 0.35        # corporate sender, reply goes to gmail/outlook/...: the BEC pattern
-  reply_to_mismatch: 0.20        # other organization, no list headers (was 0.30)
+  reply_to_mismatch: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
   reply_to_mismatch_list: 0.03   # same, but List-Id / List-Unsubscribe / Precedence: list|bulk present
-  return_path_mismatch: 0.04     # was 0.12; never fires on list mail (bounce addresses are normal there)
+  return_path_mismatch: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
   # --- authentication -----------------------------------------------------------------------
   auth_fail: 0.35
   auth_fail_multi: 0.50          # two or more of SPF/DKIM/DMARC failed
@@ -34,11 +34,11 @@ weights:
   # --- content ---------------------------------------------------------------------------------
   prompt_injection_attempt: 0.50
   bank_detail_change: 0.45
-  credential_request: 0.30
-  hidden_html_text: 0.30
-  secrecy_request: 0.25
+  credential_request: 0.25  # calibrated v3 (dev, easy_ham FPR<=1%)
+  hidden_html_text: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
+  secrecy_request: 0.16  # calibrated v3 (dev, easy_ham FPR<=1%)
   obfuscated_text: 0.25
-  urgency_language: 0.20
+  urgency_language: 0.25  # calibrated v3 (dev, easy_ham FPR<=1%)
   payment_keywords: 0.20
   # Same keywords from a sender that is on OUR trusted-domain list AND passed DMARC (or SPF+DKIM):
   # invoices and deadlines are normal business with known partners. Inert without trusted domains
@@ -56,16 +56,16 @@ weights:
   link_ip_host: 0.40             # IPv4 / IPv6 / decimal-or-hex integer IP
   link_data_uri: 0.40            # data: or javascript: href
   link_nonstandard_port: 0.25    # explicit port other than 80/443
-  link_shortener: 0.20
+  link_shortener: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
   link_punycode: 0.20            # xn-- host that is not one of ours
   unrelated_link_host: 0.0       # the old generic part: kept for calibration, not scored
   # --- attachments ----------------------------------------------------------------------------------
   # 18.2% of missed phish carried an attachment that was not flagged.
   risky_attachment: 0.40         # executable, script, shortcut, disk image, html/svg/one, macro doc, double ext
   encrypted_attachment_hint: 0.35  # "password: 1234" / "password-protected zip" next to an attachment
-  archive_attachment: 0.20       # zip/rar/7z/gz/...: content the gateway cannot scan
+  archive_attachment: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
   office_legacy_attachment: 0.12 # .doc/.xls/.ppt/.rtf: can carry macros, common in old phish
-  image_lure: 0.15               # image attachment and almost no text
+  image_lure: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
 
 # Brands commonly impersonated in phishing links, with the registrable domains they really own.
 # Domain knowledge, not fitted to any dataset. A link host fires link_brand_impersonation when one of

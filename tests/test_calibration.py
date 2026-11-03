@@ -133,7 +133,11 @@ def test_same_organization_is_not_a_mismatch():
     assert not names(e) & {"reply_to_mismatch", "reply_to_freemail", "return_path_mismatch"}
 
 
-def test_old_fp_pattern_without_list_headers_stays_under_threshold():
+def test_cross_org_reply_and_bounce_without_list_headers_is_flagged():
+    # v2 assumed this pattern was benign. v3 weights were fitted on the real-corpus dev split
+    # (easy_ham FPR <= 1%): without list headers it is mostly phishing, and on the held-out
+    # test split easy_ham FPR stayed at 0.9%. The list-header variant must still stay low
+    # (see the test above).
     e = make_email(
         spf="none",
         dkim="none",
@@ -143,7 +147,7 @@ def test_old_fp_pattern_without_list_headers_stays_under_threshold():
         return_path="b@bounce.example",
         links=["http://news.example.org/a"],
     )
-    assert analyze_email(e, CTX)[0] < 50
+    assert analyze_email(e, CTX)[0] >= 35
 
 
 # ---------------------------------------------------------------- 3. no_authentication
