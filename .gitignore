@@ -11,3 +11,8 @@ dist/
 build/
 *.egg-info/
 .coverage
+*.db
+*.db-wal
+*.db-shm
+data/external/
+redteam/out/

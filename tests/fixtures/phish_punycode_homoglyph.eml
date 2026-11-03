@@ -1,0 +1,11 @@
+Return-Path: <payroll@xn--cme-corp-06g.com>
+Authentication-Results: mx.acme-corp.com; spf=pass smtp.mailfrom=xn--cme-corp-06g.com; dkim=pass header.d=xn--cme-corp-06g.com; dmarc=pass header.from=xn--cme-corp-06g.com
+From: Payroll <payroll@xn--cme-corp-06g.com>
+To: maria.g@acme-corp.com
+Subject: Salary adjustment letter
+Date: Wed, 04 Mar 2026 10:05:00 +0000
+Message-ID: <sal-3@xn--cme-corp-06g.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Please confirm your bank account details for the new payroll system before Friday.

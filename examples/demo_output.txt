@@ -1,9 +1,17 @@
+
+== 0. no API key is refused
+<- HTTP 401 {"detail":"missing or invalid API key"}
 == 1. analyze phishing email
 <- HTTP 200 risk=96.6% is_phishing=True
-   features: lookalike_domain, reply_to_mismatch, auth_fail, low_reputation, new_domain, urgency_language, payment_keywords, secrecy_request, off_hours_send
+   top contributions: lookalike_domain +22.8; auth_fail +19.8; low_reputation +12.3; reply_to_mismatch +10.2
+
+== 1b. analyze raw .eml (phish_punycode_homoglyph.eml)
+<- HTTP 200 risk=68.0%
+   homoglyph_domain: +54.7 (xn--cme-corp-06g.com renders as acme-corp.com, spoofing acme-corp.com)
+   payment_keywords: +13.3 (matched 'bank account')
 
 == 2. transfer_funds is suspended by the MFA gateway
-<- HTTP 202 {"status":"pending_mfa","pending_id":"J4hU6eHCH5uBsXWq","confirm_digest":"dc915601d5657cc0","summary":"transfer_funds (digest dc915601d5657cc0) requested by alice","expires_at":1793675518.9968998,"next":"POST /mfa/verify with the out-of-band code and confirm_digest"}
+<- HTTP 202 {"status":"pending_mfa","pending_id":"2RZ_lqMEscigGQRj","confirm_digest":"dc915601d5657cc0","summary":"transfer_funds (digest dc915601d5657cc0) requested by alice","expires_at":1793678831.2632627,"mfa_method":"channel","next":"POST /mfa/verify with the out-of-band code and confirm_digest"}
 
 == 3. wrong code is rejected
 <- HTTP 403 {"detail":{"error":"verification failed (bad_code)","attempts_left":2}}
@@ -15,3 +23,9 @@
 
 ==    late (correct) code after timeout is rejected
 <- HTTP 410 {"detail":"MFA timed out; action rejected"}
+
+== 6. TOTP enrollment returns an otpauth:// URI (secret redacted here)
+<- HTTP 200 {"user":"carol","otpauth_uri":"otpauth://totp/PhishGuard:carol?secret=<redacted>&issuer=PhishGuard"}
+
+== 7. audit hash chain verifies
+<- HTTP 200 {"chain_ok":true,"first_broken":null}

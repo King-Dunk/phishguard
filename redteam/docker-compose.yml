@@ -1,0 +1,51 @@
+# Red-team sandbox: the API and the attacker in separate containers on a network with no way out.
+#   docker compose -f redteam/docker-compose.yml up --build --abort-on-container-exit --exit-code-from redteam
+# Report is printed and written to redteam/out/report.md (create it first: install -d -m 0777 redteam/out).
+# Without Docker: python -m redteam.runner (in-process, strongest oracles; this is what pytest runs).
+name: phishguard-redteam
+
+x-keys: &keys
+  REDTEAM_API_KEY: ${REDTEAM_API_KEY:-sandbox-client-key}
+  REDTEAM_ADMIN_KEY: ${REDTEAM_ADMIN_KEY:-sandbox-admin-key}
+
+services:
+  api:
+    build: {context: .., dockerfile: Dockerfile}
+    user: "10001:10001"            # non-root (also set in the image)
+    read_only: true                # immutable root filesystem
+    tmpfs:
+      - /data:size=64m,uid=10001,gid=10001,mode=0700   # SQLite lives here, wiped with the container
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    environment:
+      PHISHGUARD_API_KEYS: ${REDTEAM_API_KEY:-sandbox-client-key}
+      PHISHGUARD_ADMIN_KEYS: ${REDTEAM_ADMIN_KEY:-sandbox-admin-key}
+      PHISHGUARD_DB_PATH: /data/phishguard.db
+      PHISHGUARD_LLM_MODE: mock      # no API key inside the sandbox, and no route out anyway
+      PHISHGUARD_EXECUTIVES: David Chen
+      PHISHGUARD_RATE_LIMIT: "100000"
+    networks: [sandbox]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 2s
+      retries: 30
+
+  redteam:
+    build: {context: .., dockerfile: redteam/Dockerfile.runner}
+    depends_on: {api: {condition: service_healthy}}
+    environment:
+      <<: *keys
+      REDTEAM_BASE_URL: http://api:8000
+    command: ["python", "-m", "redteam.runner", "--mode", "http", "--report", "/out/report.md", "--print"]
+    volumes: ["./out:/out"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [sandbox]
+
+networks:
+  sandbox:
+    internal: true    # no default gateway: neither container can reach the internet

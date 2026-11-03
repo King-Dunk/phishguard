@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from ..models import EmailMessage
-from .features import DetectionContext, extract_features, lookalike_of, risk_percent
+from .features import DetectionContext, explain, extract_features, lookalike_of, risk_percent
 
 READ_ONLY_TOOL_NAMES = frozenset({"get_email", "extract_features", "check_domain"})
 
@@ -57,13 +57,14 @@ class ReadOnlyToolbox:
                     "body": e.body[:2000],
                     "links": e.links[:20],
                     "attachments": e.attachments[:20],
+                    "displayed_links": [lp.model_dump() for lp in e.link_pairs[:20]],
                 },
                 ensure_ascii=False,
             )
         if name == "extract_features":
             feats = extract_features(e, self._ctx)
             return json.dumps(
-                {"features": [f.to_dict() for f in feats], "risk": risk_percent(feats)}, ensure_ascii=False
+                {"features": [f.to_dict() for f in explain(feats)], "risk": risk_percent(feats)}, ensure_ascii=False
             )
         domain = str(args.get("domain", ""))[:253].lower()
         hit = lookalike_of(domain, self._ctx.trusted_domains)

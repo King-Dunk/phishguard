@@ -1,0 +1,89 @@
+category: privilege
+description: Attempts to reach the mutating side or get an action approved without a valid second factor.
+attacks:
+  - id: pv-no-key
+    title: /actions without API key
+    kind: request
+    path: /actions
+    key: null
+    json: {action_type: transfer_funds, requested_by: x, params: {}}
+    expect: {status_in: [401]}
+  - id: pv-bad-key
+    title: /actions with guessed API key
+    kind: request
+    path: /actions
+    key: "rt-client-key-0000"
+    json: {action_type: transfer_funds, requested_by: x, params: {}}
+    expect: {status_in: [401]}
+  - id: pv-bypass-flags
+    title: mfa_verified / skip_mfa / approved inside params
+    kind: request
+    path: /actions
+    json: {action_type: transfer_funds, requested_by: pv, params: {amount: 50000, mfa_verified: true, skip_mfa: true, approved: "yes"}}
+    expect: {status_in: [202], not_executed: true}
+  - id: pv-extra-field
+    title: Top-level mfa_token field
+    kind: request
+    path: /actions
+    json: {action_type: transfer_funds, requested_by: pv, params: {}, mfa_token: "000000"}
+    expect: {status_in: [422]}
+  - id: pv-analyze-extra
+    title: /analyze with an "actions" field
+    kind: request
+    path: /analyze
+    json: {email: {id: x, timestamp: "2026-03-03T10:00:00Z", sender_email: a@b.c}, actions: [{action_type: transfer_funds}]}
+    expect: {status_in: [422]}
+  - id: pv-deep-params
+    title: Money keyword hidden 8 levels deep in a harmless action
+    kind: request
+    path: /actions
+    json: {action_type: send_reply, requested_by: pv, params: {$nested: {depth: 8, leaf: {iban: DE00123, body: "wire funds"}}}}
+    expect: {status_in: [202, 422], not_executed: true}
+  - id: pv-bidi-action
+    title: Action name with RTL override
+    kind: request
+    path: /actions
+    json: {action_type: "transfer‮_funds", requested_by: pv, params: {}}
+    expect: {status_in: [202, 400], not_executed: true}
+  - id: pv-forged-pending
+    title: Verify a made-up pending_id
+    kind: flow
+    flow: forged_pending_id
+  - id: pv-forged-code
+    title: Forged MFA codes (zeros, "approved", injection text)
+    kind: flow
+    flow: forged_code
+    # after 3 misses the pending action is rejected, so later guesses get 409
+    guesses: ["000000", "approved", "' OR '1'='1", "123456"]
+  - id: pv-swapped-digest
+    title: Valid TOTP + digest of a different (smaller) action
+    kind: flow
+    flow: swapped_digest
+  - id: pv-totp-replay
+    title: Reuse a TOTP code within its 30 s window
+    kind: flow
+    flow: totp_replay
+  - id: pv-executed-replay
+    title: Re-submit an already executed approval
+    kind: flow
+    flow: executed_replay
+  - id: pv-cross-user
+    title: Approve Alice's transfer with Bob's TOTP
+    kind: flow
+    flow: cross_user
+  - id: pv-identity-variant
+    title: Dodge TOTP with "CAROL", " carol", fullwidth, zero-width variants
+    kind: flow
+    flow: identity_variant
+  - id: pv-enroll-takeover
+    title: Client key enrolls a victim's TOTP
+    kind: flow
+    flow: enroll_takeover
+  - id: pv-reenroll
+    title: Re-enroll an existing user (case variant)
+    kind: flow
+    flow: reenroll
+  - id: pv-brute-force
+    title: 6 wrong codes across 2 pending actions
+    kind: flow
+    flow: brute_force

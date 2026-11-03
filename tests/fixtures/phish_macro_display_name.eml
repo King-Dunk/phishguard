@@ -1,0 +1,22 @@
+Return-Path: <hr-acme@outlook.com>
+Authentication-Results: mx.acme-corp.com; spf=pass smtp.mailfrom=outlook.com; dkim=pass header.d=outlook.com; dmarc=pass header.from=outlook.com
+From: "Acme Corp HR" <hr-acme@outlook.com>
+To: omar.h@acme-corp.com
+Subject: 2026 bonus schedule
+Date: Wed, 04 Mar 2026 16:10:00 +0000
+Message-ID: <hr-55@outlook.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B4"
+
+--B4
+Content-Type: text/plain; charset=utf-8
+
+Please review the attached bonus schedule and enable editing to see your amount.
+
+--B4
+Content-Type: application/vnd.ms-word.document.macroEnabled.12
+Content-Disposition: attachment; filename="bonus_2026.docm"
+Content-Transfer-Encoding: base64
+
+UEsgZmFrZSBkb2Nt
+--B4--

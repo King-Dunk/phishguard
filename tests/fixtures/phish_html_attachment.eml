@@ -1,0 +1,22 @@
+Return-Path: <noreply@docs-share-online.com>
+Authentication-Results: mx.acme-corp.com; spf=softfail smtp.mailfrom=docs-share-online.com; dkim=none; dmarc=none
+From: Document Share <noreply@docs-share-online.com>
+To: priya.s@acme-corp.com
+Subject: Invoice INV-2291 shared with you
+Date: Tue, 03 Mar 2026 13:20:00 +0000
+Message-ID: <inv-2291@docs-share-online.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B2"
+
+--B2
+Content-Type: text/plain; charset=utf-8
+
+An invoice was shared with you. Open the attached document to view it.
+
+--B2
+Content-Type: text/html
+Content-Disposition: attachment; filename="INV-2291.html"
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGZvcm0gYWN0aW9uPSJodHRwOi8vZXZpbC5leGFtcGxlL2xvZ2luIj4=
+--B2--

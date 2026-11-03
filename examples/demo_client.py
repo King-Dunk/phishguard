@@ -8,6 +8,7 @@ PHISHGUARD_MFA_TIMEOUT (e.g. 3) so step 5 is quick. `bash examples/run_demo.sh` 
 from __future__ import annotations
 
 import argparse
+import pathlib
 import re
 import time
 
@@ -36,23 +37,33 @@ def code_for(log: str, pid: str) -> str:
 
 
 def show(title: str, r: httpx.Response) -> None:
-    print(f"\n== {title}\n<- HTTP {r.status_code} {r.text[:300]}")
+    print(f"\n== {title}\n<- HTTP {r.status_code} {re.sub(r'secret=[A-Z2-7]+', 'secret=<redacted>', r.text[:300])}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default="http://127.0.0.1:8000")
     ap.add_argument("--code-log", required=True)
+    ap.add_argument("--api-key", required=True, help="one of the server's PHISHGUARD_API_KEYS")
     ap.add_argument("--timeout-wait", type=float, default=4.0, help="seconds to wait for step 5 (> server MFA timeout)")
     a = ap.parse_args()
-    c = httpx.Client(base_url=a.base_url, timeout=10)
+    c = httpx.Client(base_url=a.base_url, timeout=10, headers={"x-api-key": a.api_key})
+
+    r = httpx.post(f"{a.base_url}/analyze", json={"email": PHISH})
+    show("0. no API key is refused", r)
 
     r = c.post("/analyze", json={"email": PHISH})
     body = r.json()
     print(
         f"== 1. analyze phishing email\n<- HTTP {r.status_code} risk={body['risk_percent']}% is_phishing={body['is_phishing']}"
     )
-    print("   features:", ", ".join(f["name"] for f in body["features"]))
+    print("   top contributions:", "; ".join(f"{f['name']} +{f['contribution']}" for f in body["features"][:4]))
+
+    eml = pathlib.Path(__file__).parent.parent / "tests/fixtures/phish_punycode_homoglyph.eml"
+    r = c.post("/analyze/eml", json={"raw": eml.read_text()})
+    body = r.json()
+    print(f"\n== 1b. analyze raw .eml ({eml.name})\n<- HTTP {r.status_code} risk={body['risk_percent']}%")
+    print("   " + "\n   ".join(body["explanation"]))
 
     r = c.post("/actions", json=TRANSFER)
     show("2. transfer_funds is suspended by the MFA gateway", r)
@@ -79,6 +90,11 @@ def main() -> None:
         },
     )
     show("   late (correct) code after timeout is rejected", r)
+
+    r = c.post("/mfa/enroll", json={"user": "carol"})
+    show("6. TOTP enrollment returns an otpauth:// URI (secret redacted here)", r)
+
+    show("7. audit hash chain verifies", c.get("/audit/verify"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+Return-Path: <anna.k@acme-corp.com>
+Authentication-Results: mx.acme-corp.com; spf=pass smtp.mailfrom=acme-corp.com; dkim=pass header.d=acme-corp.com; dmarc=pass header.from=acme-corp.com
+From: Anna K <anna.k@acme-corp.com>
+To: li.wei@acme-corp.com
+Subject: Notes from Monday sync
+Date: Tue, 03 Mar 2026 10:15:00 +0000
+Message-ID: <sync-001@acme-corp.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi Li, the notes from Monday are in the team wiki. Next sync is Thursday 10:00.
+Thanks!

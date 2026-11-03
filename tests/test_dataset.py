@@ -41,3 +41,48 @@ def test_eval_script_never_imports_anthropic_sdk():
         text=True,
     )
     assert r.returncode == 0, r.stderr
+
+
+class CountingLLM:
+    """Wraps MockLLM and counts agent runs (first call of each run)."""
+
+    def __init__(self):
+        from phishguard.llm import MockLLM
+
+        self.inner, self.runs = MockLLM(), 0
+
+    def complete(self, **kw):
+        if len(kw["messages"]) == 1:
+            self.runs += 1
+        r = self.inner.complete(**kw)
+        r.input_tokens, r.output_tokens = 1000, 100
+        return r
+
+
+def test_rules_mode_metrics_and_zero_cost():
+    m = evaluate(30, seed=1, mode="rules")
+    assert m["mode"] == "rules" and m["llm_calls"] == 0 and m["cost_per_1k_usd"] == 0.0
+    assert 0 < m["f1"] <= 1 and m["avg_latency_ms"] >= 0
+
+
+def test_hybrid_calls_llm_only_in_gray_zone():
+    from phishguard.dataset.generator import EXECUTIVES, TRUSTED_DOMAINS
+    from phishguard.readonly import DetectionContext, analyze_email
+
+    ctx = DetectionContext(TRUSTED_DOMAINS, EXECUTIVES)
+    gray = sum(30 <= analyze_email(x.email, ctx)[0] <= 70 for x in generate_dataset(30, seed=3))
+    h_llm, a_llm = CountingLLM(), CountingLLM()
+    h = evaluate(30, seed=3, mode="hybrid", llm=h_llm, price_in=1.0, price_out=5.0)
+    a = evaluate(30, seed=3, mode="llm", llm=a_llm, price_in=1.0, price_out=5.0)
+    assert h["llm_calls"] == h_llm.runs == gray < a["llm_calls"] == a_llm.runs == 90
+    assert h["cost_per_1k_usd"] < a["cost_per_1k_usd"]
+    assert evaluate(30, seed=3, mode="llm", llm=CountingLLM())["cost_per_1k_usd"] is None  # no prices given
+
+
+def test_cli_skips_llm_modes_without_key(monkeypatch, capsys):
+    from phishguard.dataset.evaluate import main
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    main(["--n", "5", "--modes", "rules,llm,hybrid"])
+    out = capsys.readouterr().out
+    assert out.count("skipped: ANTHROPIC_API_KEY not set") == 2 and "| synthetic | rules |" in out

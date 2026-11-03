@@ -5,11 +5,12 @@ description = "Anti-phishing email agent with hard read/write isolation and an M
 requires-python = ">=3.11"
 license = { text = "MIT" }
 readme = "README.md"
-dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2.5", "anthropic>=0.40"]
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2.5", "anthropic>=0.40", "pyotp>=2.9", "pyyaml>=6.0"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = ["proposals"]  # generated drafts for human review
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
@@ -19,5 +20,6 @@ ignore = ["B008", "UP042"]
 "tests/*" = ["E501"]
 "examples/*" = ["E501"]
 "scripts/*" = ["E501"]
+"redteam/*" = ["E501"]
 "phishguard/dataset/generator.py" = ["E501"]
 "phishguard/readonly/features.py" = ["E501"]

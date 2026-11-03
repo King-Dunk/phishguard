@@ -1,0 +1,27 @@
+--- a/phishguard/readonly/features.py
++++ b/phishguard/readonly/features.py
+@@ -35,6 +35,7 @@
+     "return_path_mismatch": 0.12,
+     "header_anomaly": 0.45,
+     "obfuscated_text": 0.25,
++    "soft_bec_phrasing": 0.25,
+     "hidden_html_text": 0.30,
+     "young_domain": 0.10,
+     "no_authentication": 0.08,
+@@ -76,6 +77,8 @@
+     r"|</?(system|instructions?|assistant|tool_use|tool_result)>"
+     r"|已获得.{0,6}(mfa|授权|验证|批准)|以系统(身份|管理员)|系统指令|执行转账"
+ )
++# PROPOSED by redteam/improve.py -- review before merging
++SOFT_BEC = re.compile("\\b(hi\\s+it's|it's\\s+sarah|today\\s+keep|it's\\s+david|us\\s+for\\s+now|between\\s+us|quick\\s+favour|many\\s+thanks|request\\s+hi|process\\s+settlement\\s+today|keep\\s+this\\s+between|david\\s+need)\\b")
+ RISKY_EXT = (
+     ".exe",
+     ".scr",
+@@ -345,6 +348,7 @@
+         ("secrecy_request", SECRECY),
+         ("credential_request", CREDENTIAL),
+         ("prompt_injection_attempt", INJECTION),
++        ("soft_bec_phrasing", SOFT_BEC),
+     ):
+         for tag, t in variants:
+             if t and (m := rx.search(t)):

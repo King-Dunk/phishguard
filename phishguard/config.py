@@ -28,6 +28,17 @@ class Settings:
     trusted_domains: tuple[str, ...] = ("acme-corp.com",)
     executives: tuple[str, ...] = ()
     api_key: str | None = field(default=None, repr=False)
+    # --- API hardening ---
+    api_keys: tuple[str, ...] = field(default=(), repr=False)  # client keys for X-API-Key
+    allow_unauthenticated: bool = True  # dataclass default is for tests; from_env() fails closed
+    rate_limit_per_minute: int = 60
+    db_path: str | None = None  # SQLite file for pending MFA, audit, TOTP, lockouts
+    mfa_lockout_threshold: int = 5
+    mfa_lockout_seconds: int = 900
+    trusted_authserv_id: str | None = None  # only trust Authentication-Results stamped by this MTA
+    admin_keys: tuple[str, ...] = field(default=(), repr=False)  # may call /mfa/enroll
+    open_enrollment: bool = True  # dataclass default is for tests; from_env() requires an admin key
+    max_body_bytes: int = 3_000_000
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -43,4 +54,14 @@ class Settings:
             trusted_domains=_csv("PHISHGUARD_TRUSTED_DOMAINS", ("acme-corp.com",)),
             executives=tuple(x.strip() for x in os.environ.get("PHISHGUARD_EXECUTIVES", "").split(",") if x.strip()),
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
+            api_keys=tuple(k.strip() for k in os.environ.get("PHISHGUARD_API_KEYS", "").split(",") if k.strip()),
+            allow_unauthenticated=os.environ.get("PHISHGUARD_ALLOW_NO_AUTH") == "1",
+            rate_limit_per_minute=int(os.environ.get("PHISHGUARD_RATE_LIMIT", "60")),
+            db_path=os.environ.get("PHISHGUARD_DB_PATH"),
+            mfa_lockout_threshold=int(os.environ.get("PHISHGUARD_MFA_LOCKOUT_THRESHOLD", "5")),
+            mfa_lockout_seconds=int(os.environ.get("PHISHGUARD_MFA_LOCKOUT_SECONDS", "900")),
+            trusted_authserv_id=os.environ.get("PHISHGUARD_AUTHSERV_ID") or None,
+            admin_keys=tuple(k.strip() for k in os.environ.get("PHISHGUARD_ADMIN_KEYS", "").split(",") if k.strip()),
+            open_enrollment=os.environ.get("PHISHGUARD_OPEN_ENROLLMENT") == "1",
+            max_body_bytes=int(os.environ.get("PHISHGUARD_MAX_BODY_BYTES", "3000000")),
         )

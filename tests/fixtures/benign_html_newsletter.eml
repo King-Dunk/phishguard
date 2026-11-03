@@ -1,0 +1,22 @@
+Return-Path: <bounce@notify.acme-corp.com>
+Authentication-Results: mx.acme-corp.com; spf=pass smtp.mailfrom=notify.acme-corp.com; dkim=pass header.d=acme-corp.com; dmarc=pass header.from=acme-corp.com
+From: ACME Corp Internal Comms <news@acme-corp.com>
+To: all@acme-corp.com
+Subject: This week at ACME
+Date: Thu, 05 Mar 2026 09:30:00 +0000
+Message-ID: <news-10@acme-corp.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="ALT"
+
+--ALT
+Content-Type: text/plain; charset=utf-8
+
+Town hall on Friday. Agenda: https://intranet.acme-corp.com/townhall
+
+--ALT
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Town hall on Friday.</p>
+<p>Agenda: <a href="https://intranet.acme-corp.com/townhall">intranet.acme-corp.com/townhall</a></p>
+<p><a href="https://github.com/acme">Our open source work</a></p></body></html>
+--ALT--

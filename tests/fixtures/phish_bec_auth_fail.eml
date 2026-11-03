@@ -1,0 +1,13 @@
+Return-Path: <bounce@mailer-x.net>
+Authentication-Results: mx.acme-corp.com; spf=fail smtp.mailfrom=mailer-x.net; dkim=none; dmarc=fail header.from=acme-c0rp.com
+From: David Chen <david.chen@acme-c0rp.com>
+Reply-To: david.chen.ceo@gmail.com
+To: finance@acme-corp.com
+Subject: Urgent wire today
+Date: Sat, 07 Mar 2026 22:40:00 +0000
+Message-ID: <bec-1@acme-c0rp.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+I need you to process a wire transfer of $48,500 immediately. Keep this confidential
+until the deal is announced. Reply to me directly.
