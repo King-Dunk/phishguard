@@ -142,7 +142,11 @@ def parse_auth_results(msg: StdMessage, trusted_authserv_id: str | None = None) 
 
 
 def _addr(msg: StdMessage, name: str) -> tuple[str, str]:
-    raw = msg.get(name)
+    try:
+        raw = msg.get(name)
+    except Exception:  # stdlib header registry crashes on some malformed lists (e.g. stray groups)
+        lname = name.lower()
+        raw = next((v for k, v in msg.raw_items() if k.lower() == lname), None)
     if raw is None:
         return "", ""
     pairs = getaddresses([str(raw)])

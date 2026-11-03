@@ -118,3 +118,17 @@ def test_safe_extract_refuses_traversal(tmp_path, bad):
 
 def test_raw_mail_never_committed():
     assert "data/external/" in (ROOT / ".gitignore").read_text()
+
+
+def test_mbox_with_raw_non_ascii_does_not_crash(corpus):
+    # Real Nazario mboxes contain unencoded 8-bit bytes inside MIME parts;
+    # re-serialising via Message.as_bytes() raised UnicodeEncodeError.
+    # Shape seen in phishing3.mbox: multipart header whose boundary never appears.
+    bad = (
+        b"From: Bank <alert@examp1e.com>\r\nTo: a@b.com\r\nSubject: verify\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=NOPE\r\n\r\n"
+        b"Verify now caf\xc3\xa9 - boundary never appears\r\n"
+    )
+    _mbox(corpus / "phish" / "phishing9.mbox", [bad])
+    s = load_external(corpus)
+    assert sum(i.label for i in s.items) == 8
