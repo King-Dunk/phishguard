@@ -1,4 +1,5 @@
 """Runtime settings. The API key is read ONLY from the environment."""
+
 from __future__ import annotations
 
 import os
@@ -29,7 +30,7 @@ class Settings:
     api_key: str | None = field(default=None, repr=False)
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         return cls(
             model=os.environ.get("PHISHGUARD_MODEL", DEFAULT_MODEL),
             llm_mode=os.environ.get("PHISHGUARD_LLM_MODE", "mock").lower(),
@@ -40,8 +41,6 @@ class Settings:
             mfa_max_attempts=int(os.environ.get("PHISHGUARD_MFA_MAX_ATTEMPTS", "3")),
             audit_log_path=os.environ.get("PHISHGUARD_AUDIT_LOG"),
             trusted_domains=_csv("PHISHGUARD_TRUSTED_DOMAINS", ("acme-corp.com",)),
-            executives=tuple(
-                x.strip() for x in os.environ.get("PHISHGUARD_EXECUTIVES", "").split(",") if x.strip()
-            ),
+            executives=tuple(x.strip() for x in os.environ.get("PHISHGUARD_EXECUTIVES", "").split(",") if x.strip()),
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
         )

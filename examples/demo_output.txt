@@ -1,0 +1,17 @@
+== 1. analyze phishing email
+<- HTTP 200 risk=96.6% is_phishing=True
+   features: lookalike_domain, reply_to_mismatch, auth_fail, low_reputation, new_domain, urgency_language, payment_keywords, secrecy_request, off_hours_send
+
+== 2. transfer_funds is suspended by the MFA gateway
+<- HTTP 202 {"status":"pending_mfa","pending_id":"J4hU6eHCH5uBsXWq","confirm_digest":"dc915601d5657cc0","summary":"transfer_funds (digest dc915601d5657cc0) requested by alice","expires_at":1793675518.9968998,"next":"POST /mfa/verify with the out-of-band code and confirm_digest"}
+
+== 3. wrong code is rejected
+<- HTTP 403 {"detail":{"error":"verification failed (bad_code)","attempts_left":2}}
+
+== 4. correct out-of-band code + digest echo is released
+<- HTTP 200 {"status":"executed","result":{"ok":true,"effect_index":0}}
+
+== 5. second transfer, then wait 4.0s without verifying
+
+==    late (correct) code after timeout is rejected
+<- HTTP 410 {"detail":"MFA timed out; action rejected"}

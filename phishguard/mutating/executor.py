@@ -4,6 +4,7 @@ Honest limit: the grant is an in-process guard against accidental/LLM-driven cal
 not a defence against arbitrary code running in the same process. For a real
 boundary, run this package as a separate service with its own credentials.
 """
+
 from __future__ import annotations
 
 from typing import Any

@@ -1,4 +1,5 @@
 """READ-ONLY package. It must never import phishguard.mutating (enforced by tests)."""
+
 from ..models import EmailMessage
 from .features import DetectionContext, Feature, extract_features, risk_percent
 from .tools import READ_ONLY_TOOL_NAMES, ReadOnlyToolbox

@@ -3,6 +3,7 @@
 Flow: submit -> PENDING (code sent out-of-band) -> verify(code + digest echo = double check)
       -> EXECUTED | REJECTED (bad code x N / digest mismatch) | EXPIRED (timeout, auto-reject)
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -11,7 +12,7 @@ import json
 import secrets
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .audit import AuditLog
@@ -106,9 +107,17 @@ class MFAGateway:
         summary = f"{action.value} (digest {digest}) requested by {requested_by}"
         with self._lock:
             self._sweep_locked()
-            self._pending[pid] = _Pending(pid, action, params, requested_by, reason, digest, expires, salt, _hash(salt, code))
-        self.audit.record("action_suspended", pending_id=pid, action=action.value, digest=digest, by=requested_by,
-                          param_keys=sorted(params))
+            self._pending[pid] = _Pending(
+                pid, action, params, requested_by, reason, digest, expires, salt, _hash(salt, code)
+            )
+        self.audit.record(
+            "action_suspended",
+            pending_id=pid,
+            action=action.value,
+            digest=digest,
+            by=requested_by,
+            param_keys=sorted(params),
+        )
         self.channel.deliver(pid, code, summary)
         return SubmitResult("pending_mfa", pending_id=pid, digest=digest, summary=summary, expires_at=expires)
 
@@ -138,8 +147,9 @@ class MFAGateway:
 
             p.state = "executed"
             result = self.executor.run(_issue_grant(p.digest), p.action, p.params)
-            self.audit.record("action_executed", pending_id=p.id, action=p.action.value, digest=p.digest,
-                              by=p.requested_by, mfa=True)
+            self.audit.record(
+                "action_executed", pending_id=p.id, action=p.action.value, digest=p.digest, by=p.requested_by, mfa=True
+            )
             return result
 
     def sweep(self) -> int:
@@ -160,7 +170,12 @@ class MFAGateway:
             if p.state == "pending" and now >= p.expires_at:
                 p.state = "expired"
                 n += 1
-                self.audit.record("action_rejected", pending_id=p.id, reason="mfa_timeout", digest=p.digest,
-                                  action=p.action.value, by=p.requested_by)
+                self.audit.record(
+                    "action_rejected",
+                    pending_id=p.id,
+                    reason="mfa_timeout",
+                    digest=p.digest,
+                    action=p.action.value,
+                    by=p.requested_by,
+                )
         return n
-

@@ -1,4 +1,5 @@
 """Proof that the read-only side cannot import or reach the mutating side."""
+
 import ast
 import pathlib
 import subprocess
@@ -51,8 +52,9 @@ def test_agent_and_llm_source_never_import_mutating():
 
 
 def _run(code: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-c", textwrap.dedent(code)], capture_output=True, text=True,
-                          cwd=ROOT.parent)
+    return subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)], capture_output=True, text=True, cwd=ROOT.parent
+    )
 
 
 def test_runtime_import_closure_excludes_mutating():

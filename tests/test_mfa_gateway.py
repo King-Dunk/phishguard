@@ -1,8 +1,17 @@
 import pytest
 
 from phishguard.mutating import (
-    ActionType, AuditLog, CaptureChannel, Executor, MFAFailed, MFAGateway, PendingExpired,
-    PendingFinalized, PendingNotFound, UnknownActionError, requires_mfa,
+    ActionType,
+    AuditLog,
+    CaptureChannel,
+    Executor,
+    MFAFailed,
+    MFAGateway,
+    PendingExpired,
+    PendingFinalized,
+    PendingNotFound,
+    UnknownActionError,
+    requires_mfa,
 )
 from phishguard.mutating.executor import ExecutionGrant
 
@@ -11,7 +20,9 @@ from phishguard.mutating.executor import ExecutionGrant
 def env(clock):
     ch = CaptureChannel()
     ex = Executor()
-    gw = MFAGateway(executor=ex, audit=AuditLog(clock=clock), channel=ch, timeout_seconds=60, max_attempts=3, clock=clock)
+    gw = MFAGateway(
+        executor=ex, audit=AuditLog(clock=clock), channel=ch, timeout_seconds=60, max_attempts=3, clock=clock
+    )
     return gw, ex, ch, clock
 
 
@@ -25,8 +36,23 @@ def test_low_risk_action_runs_without_mfa(env):
     assert r.status == "executed" and len(ex.ledger) == 1 and not ch.codes
 
 
-@pytest.mark.parametrize("a", [x for x in ActionType if x.name in
-    ("TRANSFER_FUNDS", "PAY_INVOICE", "APPROVE_INVOICE", "CHANGE_BANK_DETAILS", "CHANGE_ACCOUNT_EMAIL", "RESET_PASSWORD", "CHANGE_ACCOUNT_SETTINGS")])
+@pytest.mark.parametrize(
+    "a",
+    [
+        x
+        for x in ActionType
+        if x.name
+        in (
+            "TRANSFER_FUNDS",
+            "PAY_INVOICE",
+            "APPROVE_INVOICE",
+            "CHANGE_BANK_DETAILS",
+            "CHANGE_ACCOUNT_EMAIL",
+            "RESET_PASSWORD",
+            "CHANGE_ACCOUNT_SETTINGS",
+        )
+    ],
+)
 def test_sensitive_actions_always_suspended(env, a):
     gw, ex, ch, _ = env
     r = gw.submit(a.value, {}, "alice")
@@ -55,7 +81,7 @@ def test_three_bad_codes_reject_and_right_code_then_fails(env):
     r = gw.submit("pay_invoice", {"invoice": "I1"}, "alice")
     good = ch.codes[r.pending_id]
     bad = "000000" if good != "000000" else "111111"
-    for i in range(3):
+    for _ in range(3):
         with pytest.raises(MFAFailed):
             gw.verify(r.pending_id, bad, r.digest)
     with pytest.raises(PendingFinalized):
@@ -122,7 +148,9 @@ def test_action_name_obfuscation_still_hits_mfa(env):
 
 def test_innocent_action_with_money_content_escalates(env):
     gw, ex, ch, _ = env
-    assert gw.submit("send_reply", {"body": "Please wire the funds to our new bank account"}, "a").status == "pending_mfa"
+    assert (
+        gw.submit("send_reply", {"body": "Please wire the funds to our new bank account"}, "a").status == "pending_mfa"
+    )
     assert gw.submit("send_reply", {"body": "转账到新的银行账户"}, "a").status == "pending_mfa"
     assert gw.submit("block_sender", {"sender": "x@y.com", "iban": "DE00"}, "a").status == "pending_mfa"
     assert gw.submit("quarantine_email", {}, "a", reason="invoice scam").status == "pending_mfa"

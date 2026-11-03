@@ -1,4 +1,5 @@
 """Which actions are sensitive. Decided in code, never by the LLM or by request fields."""
+
 from __future__ import annotations
 
 import re

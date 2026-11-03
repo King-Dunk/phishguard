@@ -1,4 +1,5 @@
 """Offline evaluation with MockLLM only.  python -m phishguard.dataset.evaluate --n 100 --seed 42"""
+
 from __future__ import annotations
 
 import argparse
@@ -20,10 +21,16 @@ def evaluate(n_per_category: int = 100, seed: int = 42, threshold: float = 50.0)
         pred = agent.analyze(it.email).risk_percent >= threshold
         key = ("tp" if pred else "fn") if it.label else ("fp" if pred else "tn")
         per_cat[it.category][key] += 1
-        tp += key == "tp"; fp += key == "fp"; tn += key == "tn"; fn += key == "fn"
+        tp += key == "tp"
+        fp += key == "fp"
+        tn += key == "tn"
+        fn += key == "fn"
     div = lambda a, b: round(a / b, 4) if b else None  # noqa: E731
     return {
-        "seed": seed, "n_per_category": n_per_category, "threshold": threshold, "total": tp + fp + tn + fn,
+        "seed": seed,
+        "n_per_category": n_per_category,
+        "threshold": threshold,
+        "total": tp + fp + tn + fn,
         "confusion": {"tp": tp, "fp": fp, "tn": tn, "fn": fn},
         "accuracy": div(tp + tn, tp + fp + tn + fn),
         "precision": div(tp, tp + fp),

@@ -30,7 +30,14 @@ def test_eval_meets_floor_and_makes_no_network_calls(monkeypatch):
 
 
 def test_eval_script_never_imports_anthropic_sdk():
-    r = subprocess.run([sys.executable, "-c",
-        "import sys; from phishguard.dataset.evaluate import evaluate; evaluate(10); "
-        "sys.exit(1 if 'anthropic' in sys.modules else 0)"], capture_output=True, text=True)
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from phishguard.dataset.evaluate import evaluate; evaluate(10); "
+            "sys.exit(1 if 'anthropic' in sys.modules else 0)",
+        ],
+        capture_output=True,
+        text=True,
+    )
     assert r.returncode == 0, r.stderr

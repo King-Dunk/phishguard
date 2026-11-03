@@ -1,4 +1,5 @@
 """Read-only tool interface exposed to the LLM. No tool here can change anything."""
+
 from __future__ import annotations
 
 import json
@@ -21,8 +22,16 @@ class ReadOnlyToolbox:
     def schemas(self) -> list[dict[str, Any]]:
         empty = {"type": "object", "properties": {}}
         return [
-            {"name": "get_email", "description": "Read the email under analysis (untrusted content).", "input_schema": empty},
-            {"name": "extract_features", "description": "Run deterministic phishing feature extraction.", "input_schema": empty},
+            {
+                "name": "get_email",
+                "description": "Read the email under analysis (untrusted content).",
+                "input_schema": empty,
+            },
+            {
+                "name": "extract_features",
+                "description": "Run deterministic phishing feature extraction.",
+                "input_schema": empty,
+            },
             {
                 "name": "check_domain",
                 "description": "Check whether a domain imitates a trusted domain.",
@@ -58,4 +67,6 @@ class ReadOnlyToolbox:
             )
         domain = str(args.get("domain", ""))[:253].lower()
         hit = lookalike_of(domain, self._ctx.trusted_domains)
-        return json.dumps({"domain": domain, "lookalike_of": hit[0] if hit else None, "similarity": hit[1] if hit else 0})
+        return json.dumps(
+            {"domain": domain, "lookalike_of": hit[0] if hit else None, "similarity": hit[1] if hit else 0}
+        )

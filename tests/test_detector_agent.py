@@ -1,14 +1,10 @@
-import os
-import subprocess
-import sys
-
 import pytest
 
 from phishguard.agent import PhishingAgent
 from phishguard.config import DEFAULT_MODEL, Settings
-from phishguard.llm.base import LLMClient, LLMResponse, MissingAPIKeyError, ToolCall
-from phishguard.llm.anthropic_client import AnthropicLLM
 from phishguard.llm import MockLLM
+from phishguard.llm.anthropic_client import AnthropicLLM
+from phishguard.llm.base import LLMClient, LLMResponse, MissingAPIKeyError, ToolCall
 from phishguard.readonly import DetectionContext, analyze_email
 from tests.conftest import make_email
 
@@ -46,7 +42,9 @@ def test_agent_mock_flow_and_counters(settings, phish):
 
 class LoopLLM(LLMClient):
     def complete(self, *, system, messages, tools, max_tokens):
-        return LLMResponse(tool_calls=[ToolCall(f"c{len(messages)}", "get_email", {})], input_tokens=10, output_tokens=5)
+        return LLMResponse(
+            tool_calls=[ToolCall(f"c{len(messages)}", "get_email", {})], input_tokens=10, output_tokens=5
+        )
 
 
 def test_max_steps_circuit_breaker(benign):
@@ -86,6 +84,10 @@ def test_defaults_and_api_key_from_env_only(monkeypatch):
 
 
 def test_no_hardcoded_key_in_source():
-    import pathlib, re, phishguard
+    import pathlib
+    import re
+
+    import phishguard
+
     for f in pathlib.Path(phishguard.__file__).parent.rglob("*.py"):
         assert not re.search(r"sk-ant-[A-Za-z0-9_-]{10,}", f.read_text()), f

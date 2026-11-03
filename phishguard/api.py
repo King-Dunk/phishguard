@@ -1,4 +1,5 @@
 """FastAPI layer. /analyze is read-only; /actions and /mfa/verify go through the MFA gateway."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -96,7 +97,7 @@ def create_app(
         try:
             res = gateway.submit(req.action_type, req.params, req.requested_by, req.reason)
         except UnknownActionError as e:
-            raise HTTPException(400, str(e))
+            raise HTTPException(400, str(e)) from None
         if res.status == "executed":
             return {"status": "executed", "result": res.result}
         from fastapi.responses import JSONResponse
@@ -118,13 +119,13 @@ def create_app(
         try:
             result = gateway.verify(req.pending_id, req.code, req.confirm_digest)
         except PendingNotFound:
-            raise HTTPException(404, "unknown pending action")
+            raise HTTPException(404, "unknown pending action") from None
         except PendingExpired:
-            raise HTTPException(410, "MFA timed out; action rejected")
+            raise HTTPException(410, "MFA timed out; action rejected") from None
         except PendingFinalized as e:
-            raise HTTPException(409, str(e))
+            raise HTTPException(409, str(e)) from None
         except MFAFailed as e:
-            raise HTTPException(403, {"error": str(e), "attempts_left": e.attempts_left})
+            raise HTTPException(403, {"error": str(e), "attempts_left": e.attempts_left}) from None
         return {"status": "executed", "result": result}
 
     return app

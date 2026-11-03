@@ -1,4 +1,5 @@
 """LLM client interface. Messages use the Anthropic content-block format."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

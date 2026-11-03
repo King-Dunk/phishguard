@@ -1,9 +1,10 @@
 """Deterministic phishing feature extraction and scoring (read-only, pure functions)."""
+
 from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
@@ -200,10 +201,7 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
         if bad_link is None and (
             _is_ip(host)
             or host in SHORTENERS
-            or (
-                registrable(host) != sreg
-                and not is_under(host, ctx.trusted_domains + ctx.safe_link_domains)
-            )
+            or (registrable(host) != sreg and not is_under(host, ctx.trusted_domains + ctx.safe_link_domains))
         ):
             bad_link = host
     if bad_link:

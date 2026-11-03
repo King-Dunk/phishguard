@@ -1,4 +1,5 @@
 """Shared plain data models. Imports nothing from readonly/ or mutating/."""
+
 from __future__ import annotations
 
 from datetime import datetime

@@ -1,4 +1,5 @@
 """Out-of-band MFA code delivery channels."""
+
 from __future__ import annotations
 
 import sys

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -28,9 +28,18 @@ def settings():
 
 
 def make_email(**kw) -> EmailMessage:
-    base = dict(id="e1", timestamp=datetime(2026, 3, 3, 10, 0, tzinfo=timezone.utc),
-                sender_name="Anna K", sender_email="anna.k@acme-corp.com", subject="Sync notes",
-                body="Notes attached.", sender_reputation=0.95, spf="pass", dkim="pass", dmarc="pass")
+    base = dict(
+        id="e1",
+        timestamp=datetime(2026, 3, 3, 10, 0, tzinfo=UTC),
+        sender_name="Anna K",
+        sender_email="anna.k@acme-corp.com",
+        subject="Sync notes",
+        body="Notes attached.",
+        sender_reputation=0.95,
+        spf="pass",
+        dkim="pass",
+        dmarc="pass",
+    )
     base.update(kw)
     return EmailMessage(**base)
 
@@ -43,7 +52,15 @@ def benign():
 @pytest.fixture
 def phish():
     return make_email(
-        id="p1", sender_name="David Chen", sender_email="david@acme-c0rp.com", reply_to="d@gmail.com",
-        subject="Urgent request", body="Wire transfer today, keep this confidential.",
-        sender_reputation=0.1, sender_domain_age_days=5, spf="fail", dkim="fail", dmarc="fail",
+        id="p1",
+        sender_name="David Chen",
+        sender_email="david@acme-c0rp.com",
+        reply_to="d@gmail.com",
+        subject="Urgent request",
+        body="Wire transfer today, keep this confidential.",
+        sender_reputation=0.1,
+        sender_domain_age_days=5,
+        spf="fail",
+        dkim="fail",
+        dmarc="fail",
     )

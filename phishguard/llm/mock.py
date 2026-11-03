@@ -1,4 +1,5 @@
 """Offline rule-based LLM stand-in. Never touches the network."""
+
 from __future__ import annotations
 
 import json

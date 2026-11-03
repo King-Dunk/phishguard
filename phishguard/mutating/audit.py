@@ -1,4 +1,5 @@
 """Append-only, hash-chained audit log. Never records MFA codes or raw params."""
+
 from __future__ import annotations
 
 import hashlib

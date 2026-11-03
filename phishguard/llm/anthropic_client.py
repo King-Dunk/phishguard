@@ -1,4 +1,5 @@
 """Real Anthropic client. Key comes from Settings (ANTHROPIC_API_KEY env var) only."""
+
 from __future__ import annotations
 
 from ..config import Settings

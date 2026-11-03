@@ -1,4 +1,5 @@
 """Read-only analysis agent with step and token circuit breakers."""
+
 from __future__ import annotations
 
 import json
@@ -40,9 +41,7 @@ class PhishingAgent:
         # (guards against a prompt-injected model declaring a phish "safe").
         base_risk, base_feats = analyze_email(email, self.ctx)
         toolbox = ReadOnlyToolbox(email, self.ctx)
-        messages: list[dict] = [
-            {"role": "user", "content": f"Analyze email id={email.id}. Use the tools to read it."}
-        ]
+        messages: list[dict] = [{"role": "user", "content": f"Analyze email id={email.id}. Use the tools to read it."}]
         steps = tokens = 0
         llm_risk: float | None = None
         rationale = ""
@@ -68,9 +67,7 @@ class PhishingAgent:
                 blocks: list[dict] = []
                 if resp.text:
                     blocks.append({"type": "text", "text": resp.text})
-                blocks += [
-                    {"type": "tool_use", "id": c.id, "name": c.name, "input": c.input} for c in resp.tool_calls
-                ]
+                blocks += [{"type": "tool_use", "id": c.id, "name": c.name, "input": c.input} for c in resp.tool_calls]
                 messages.append({"role": "assistant", "content": blocks})
                 messages.append(
                     {
