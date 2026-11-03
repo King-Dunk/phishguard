@@ -293,11 +293,65 @@ def test_calibrate_uses_dev_only_and_never_overwrites(corpus, tmp_path, monkeypa
 
 def test_calibration_respects_frozen_support_and_prior():
     items = generate_dataset(120, seed=9)
-    new, rep = cal.calibrate(items, min_support=30)
-    for k in cal.FROZEN:
+    new, rep = cal.calibrate(items, min_support=30, objective="balanced", threshold=35)
+    for k in cal.SECURITY_FROZEN | set(cal.ERA_FROZEN_DEFAULT):
         assert new[k] == rep["prior"][k]
     data = cal.vectorize(items, DetectionContext(trusted_domains=(), executives=()))
-    rare = [k for k in rep["prior"] if sum(k in keys for _, keys in data) < 30]
+    rare = [k for k in rep["prior"] if sum(k in keys for _, _, keys in data) < 30]
     assert all(new[k] == rep["prior"][k] for k in rare)
-    assert rep["f1_fit_new"] >= rep["f1_fit_prior"]
+    assert rep["fit_new"]["objective"] >= rep["fit_prior"]["objective"]
     assert set(new.values()) <= set(cal.GRID) | set(rep["prior"].values())
+
+
+# ---------------------------------------------------------------- round 5: FPR-constrained calibration
+def _vec(label, cat, keys, n):
+    return [(label, cat, tuple(keys))] * n
+
+
+def test_f1_trap_is_not_the_objective():
+    """3:1 phish:ham where one feature fires on everything. F1 would love it; recall@FPR<=1% must not."""
+    prior = {"no_authentication": 0.01, "credential_request": 0.3, "link_ip_host": 0.4}
+    data = (
+        _vec(1, "nazario_phish", ["no_authentication", "credential_request", "link_ip_host"], 150)
+        + _vec(1, "nazario_phish", ["no_authentication"], 150)
+        + _vec(0, "easy_ham", ["no_authentication"], 100)
+    )
+    cfg = {"objective": "recall_at_fpr", "max_fpr": 0.01, "fpr_ref": "easy_ham", "max_fpr_hard": None, "threshold": 35}
+    w = cal.fit(data, prior, cfg, frozen=frozenset(), min_support=1, l1=0.0)
+    op = cal.operating_point(data, w, cfg)
+    assert op["fpr_by_category"]["easy_ham"] <= 0.01  # the constraint holds whatever no_authentication became
+    assert op["recall"] == 0.5  # catching the other half would require flagging all ham
+
+
+def test_era_features_frozen_by_default_and_unfreezable():
+    prior = dict(load_weights().weights)
+    data = _vec(1, "nazario_phish", ["no_authentication"], 300) + _vec(0, "easy_ham", ["unrelated_link_host"], 100)
+    cfg = {"objective": "balanced", "max_fpr": 0.01, "fpr_ref": "easy_ham", "max_fpr_hard": None, "threshold": 35}
+    frozen = cal.SECURITY_FROZEN | set(cal.ERA_FROZEN_DEFAULT)
+    assert cal.fit(data, prior, cfg, frozen, min_support=1)["no_authentication"] == prior["no_authentication"]
+    learned = cal.fit(data, prior, cfg, cal.SECURITY_FROZEN, min_support=1)["no_authentication"]
+    assert learned > 0.3  # exactly the era artifact the default freeze prevents
+
+
+def test_frozen_rejects_unknown_names():
+    with pytest.raises(ValueError, match="unknown"):
+        cal.calibrate(generate_dataset(5, seed=1), frozen_extra=("not_a_feature",))
+
+
+def test_cli_objective_threshold_and_frozen(corpus, tmp_path, capsys):
+    out = tmp_path / "s.yaml"
+    assert cal.main(["--data-dir", str(corpus), "--out", str(out), "--min-support", "1", "--frozen", "none"]) == 0
+    text = out.read_text()
+    assert "max recall s.t. FPR(easy_ham) <= 1.0%" in text and "suggested threshold:" in text
+    assert (
+        "suggested_threshold:" in text
+        and "no_authentication" not in text.split("frozen (not tuned):")[1].split("\n")[0]
+    )
+    printed = capsys.readouterr().out
+    assert "suggested threshold:" in printed and "dev-val prior:" in printed
+    out2 = tmp_path / "b.yaml"
+    assert cal.main(["--data-dir", str(corpus), "--out", str(out2), "--objective", "balanced"]) == 0
+    assert "balanced per-category accuracy at threshold 35" in out2.read_text()
+    assert "no_authentication, off_hours_send" in out2.read_text().split("frozen (not tuned):")[1].split("\n")[0] or (
+        "no_authentication" in out2.read_text().split("frozen (not tuned):")[1].split("\n")[0]
+    )

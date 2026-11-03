@@ -72,7 +72,7 @@ def test_hybrid_calls_llm_only_in_gray_zone():
     ctx = DetectionContext(TRUSTED_DOMAINS, EXECUTIVES)
     gray = sum(30 <= analyze_email(x.email, ctx)[0] <= 70 for x in generate_dataset(30, seed=3))
     h_llm, a_llm = CountingLLM(), CountingLLM()
-    h = evaluate(30, seed=3, mode="hybrid", llm=h_llm, price_in=1.0, price_out=5.0)
+    h = evaluate(30, seed=3, mode="hybrid", llm=h_llm, price_in=1.0, price_out=5.0, gray_zone=(30, 70))
     a = evaluate(30, seed=3, mode="llm", llm=a_llm, price_in=1.0, price_out=5.0)
     assert h["llm_calls"] == h_llm.runs == gray < a["llm_calls"] == a_llm.runs == 90
     assert h["cost_per_1k_usd"] < a["cost_per_1k_usd"]
@@ -86,3 +86,9 @@ def test_cli_skips_llm_modes_without_key(monkeypatch, capsys):
     main(["--n", "5", "--modes", "rules,llm,hybrid"])
     out = capsys.readouterr().out
     assert out.count("skipped: ANTHROPIC_API_KEY not set") == 2 and "| synthetic | rules |" in out
+
+
+def test_hybrid_default_gray_zone_is_20_to_50():
+    import inspect
+
+    assert inspect.signature(evaluate).parameters["gray_zone"].default == (20.0, 50.0)

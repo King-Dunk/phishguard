@@ -39,12 +39,12 @@ miss is a quality gap, not a breach, and is fed to `redteam/improve.py`.
 | `dos-deep-mime` | injection | 2000 nested multiparts |  | pass |
 | `dos-wide-mime` | injection | 5000 sibling MIME parts |  | pass |
 | `dos-deep-json` | injection | JSON nested 50,000 levels |  | pass |
-| `dos-redos` | injection | Regex backtracking ("account details" + 19k spaces) | 9 | pass |
-| `dos-long-hosts` | injection | 100 links with 2000-char hostnames | 9 | pass |
-| `dos-huge-header` | injection | 500 KB Subject header | 9 | pass |
+| `dos-redos` | injection | Regex backtracking ("account details" + 19k spaces) | 1 | pass |
+| `dos-long-hosts` | injection | 100 links with 2000-char hostnames | 1 | pass |
+| `dos-huge-header` | injection | 500 KB Subject header | 1 | pass |
 | `hdr-crlf-user` | injection | CRLF + Set-Cookie in requested_by |  | pass |
-| `hdr-encoded-subject` | injection | RFC 2047 encoded CRLF + Bcc in Subject | 50 | pass |
-| `hdr-two-from` | injection | Two From addresses (trusted first) | 60 | pass |
+| `hdr-encoded-subject` | injection | RFC 2047 encoded CRLF + Bcc in Subject | 46 | pass |
+| `hdr-two-from` | injection | Two From addresses (trusted first) | 56 | pass |
 | `uni-rtlo-filename` | injection | RTL override filename invoice‮fdp.exe | 74 | pass |
 | `uni-trailing-invisible` | injection | evil.exe + zero-width / trailing dot | 41 | pass |
 | `uni-surrogate-eml` | injection | Invalid UTF-8 and control characters in raw mail |  | pass |

@@ -40,6 +40,11 @@ weights:
   obfuscated_text: 0.25
   urgency_language: 0.20
   payment_keywords: 0.20
+  # Same keywords from a sender that is on OUR trusted-domain list AND passed DMARC (or SPF+DKIM):
+  # invoices and deadlines are normal business with known partners. Inert without trusted domains
+  # (so the real-corpus numbers are unaffected). Bank-detail changes keep full weight. DESIGN Q42.
+  urgency_language_trusted_sender: 0.08
+  payment_keywords_trusted_sender: 0.08
   off_hours_send: 0.08
   # --- links -------------------------------------------------------------------------------------
   # The old catch-all "suspicious_link" (any host unrelated to the sender) fired on 82.6% of ham and

@@ -95,11 +95,12 @@ def _build_llm(settings: Settings) -> LLMClient:
     return MockLLM()
 
 
-def _result(email_id: str, r: AnalysisResult) -> dict[str, Any]:
+def _result(email_id: str, r: AnalysisResult, threshold: float) -> dict[str, Any]:
     return {
         "email_id": email_id,
         "risk_percent": r.risk_percent,
-        "is_phishing": r.risk_percent >= 50,
+        "is_phishing": r.risk_percent >= threshold,
+        "threshold": threshold,
         "features": r.features,  # sorted by contribution; contributions sum to the rule score
         "explanation": [f"{f['name']}: +{f['contribution']} ({f['evidence']})" for f in r.features],
         "steps_used": r.steps_used,
@@ -185,7 +186,7 @@ def create_app(
 
     @app.post("/analyze", dependencies=protected)
     def analyze(req: AnalyzeRequest):
-        return _result(req.email.id, agent.analyze(req.email))
+        return _result(req.email.id, agent.analyze(req.email), settings.phishing_threshold)
 
     @app.post("/analyze/eml", dependencies=protected)
     def analyze_eml(req: AnalyzeEmlRequest):
@@ -195,7 +196,7 @@ def create_app(
             raise HTTPException(413, str(e)) from None
         except EmlTooComplex as e:
             raise HTTPException(422, str(e)) from None
-        out = _result(email.id, agent.analyze(email))
+        out = _result(email.id, agent.analyze(email), settings.phishing_threshold)
         out["parsed"] = {
             "from": f"{email.sender_name} <{email.sender_email}>",
             "reply_to": email.reply_to,

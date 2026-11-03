@@ -478,6 +478,9 @@ def extract_features(
     seen = "\n".join([text, *extra, hidden_txt])
     hidden = decoded_blobs(email.body)
     variants = [("", seen), (" (base64-decoded)", hidden), (" (de-obfuscated)", deobfuscate(seen))]
+    authenticated = email.dmarc == "pass" or (email.spf == "pass" and email.dkim == "pass")
+    known_partner = authenticated and bool(ctx.trusted_domains) and is_under(sdom, ctx.trusted_domains)
+    soft = {"urgency_language", "payment_keywords"} if known_partner else set()
     obfuscated = None
     for name, rx in (
         ("urgency_language", URGENCY),
@@ -489,7 +492,8 @@ def extract_features(
     ):
         for tag, t in variants:
             if t and (m := rx.search(t)):
-                add(name, f"matched '{m.group(0)}'{tag}")
+                key = f"{name}_trusted_sender" if name in soft else None
+                add(name, f"matched '{m.group(0)}'{tag}", key)
                 if tag and obfuscated is None:
                     obfuscated = f"keyword '{m.group(0)}' only visible{tag}"
                 break
