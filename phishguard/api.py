@@ -264,6 +264,12 @@ def create_app(
     def audit_verify():
         return {"chain_ok": gateway.audit.verify_chain(), "first_broken": gateway.audit.first_broken()}
 
+    # Mailbox push notifications (separate module; mounted only when configured). Not behind X-API-Key:
+    # Google/Microsoft can't send it, so each route authenticates the sender itself.
+    from .connectors.webhooks import maybe_router
+
+    if (hooks := maybe_router()) is not None:
+        app.include_router(hooks)
     return app
 
 

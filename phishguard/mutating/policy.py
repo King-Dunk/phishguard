@@ -23,6 +23,12 @@ class ActionType(str, Enum):
     CHANGE_ACCOUNT_EMAIL = "change_account_email"
     RESET_PASSWORD = "reset_password"
     CHANGE_ACCOUNT_SETTINGS = "change_account_settings"
+    # mailbox remediation (connectors worker / scripts/mailbox_action.py)
+    MAILBOX_QUARANTINE = "mailbox_quarantine"  # move out of the inbox; reversible
+    MAILBOX_LABEL = "mailbox_label"  # add a label / category / IMAP keyword
+    MAILBOX_BANNER = "mailbox_banner"  # add a warning banner (as an annotated copy)
+    MAILBOX_DELETE = "mailbox_delete"  # always MFA: destroys evidence, hard to undo for users
+    MAILBOX_RESTORE = "mailbox_restore"  # always MFA: releasing suspected phishing is what an attacker wants
 
 
 ALWAYS_MFA = frozenset(
@@ -34,8 +40,23 @@ ALWAYS_MFA = frozenset(
         ActionType.CHANGE_ACCOUNT_EMAIL,
         ActionType.RESET_PASSWORD,
         ActionType.CHANGE_ACCOUNT_SETTINGS,
+        ActionType.MAILBOX_DELETE,
+        ActionType.MAILBOX_RESTORE,
     }
 )
+MAILBOX_ACTIONS = frozenset(
+    {
+        ActionType.MAILBOX_QUARANTINE,
+        ActionType.MAILBOX_LABEL,
+        ActionType.MAILBOX_BANNER,
+        ActionType.MAILBOX_DELETE,
+        ActionType.MAILBOX_RESTORE,
+    }
+)
+# One automatic action touches one message. More than this in one request is a bulk operation (e.g. "quarantine
+# everything from this sender") whose blast radius justifies a human second factor.
+MAILBOX_BULK_LIMIT = 10
+_MAILBOX_ID = re.compile(r"[A-Za-z0-9_\-=:+/.]{1,512}")
 
 _SENSITIVE_TEXT = re.compile(
     r"wire|transfer|invoice|payment|\bpay\b|remit|bank|iban|swift|routing|account number|gift card|bitcoin|crypto"
@@ -88,6 +109,15 @@ def _walk(obj: Any, depth: int = 0):
 def requires_mfa(action: ActionType, params: dict[str, Any], reason: str = "") -> bool:
     if action in ALWAYS_MFA:
         return True
+    if action in MAILBOX_ACTIONS:
+        ids = params.get("message_ids")
+        if not isinstance(ids, list) or not ids or len(ids) > MAILBOX_BULK_LIMIT:
+            return True  # bulk, or ids we can't count: fail closed
+        if not all(isinstance(i, str) and _MAILBOX_ID.fullmatch(i) for i in ids):
+            return True
+        # provider ids are opaque base64-ish strings that can contain "bank" or "wire" by chance; they were
+        # validated above, so only the remaining params go through the content scan
+        params = {k: v for k, v in params.items() if k != "message_ids"}
     texts = [reason]
     for n, (kind, s) in enumerate(_walk(params)):
         if kind == "overflow" or n > MAX_PARAM_NODES:
