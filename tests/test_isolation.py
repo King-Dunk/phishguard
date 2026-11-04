@@ -95,3 +95,48 @@ def test_toolbox_rejects_mutating_tool_calls(benign):
     tb = ReadOnlyToolbox(benign)
     for name in ("transfer_funds", "pay_invoice", "change_bank_details", "quarantine_email"):
         assert "error" in tb.call(name, {"amount": 1})
+
+
+# ---- mailbox connectors are READ side too -------------------------------------------------
+CONNECTOR_FORBIDDEN = FORBIDDEN + ("phishguard.worker",)
+
+
+def test_connectors_source_never_imports_mutating_or_orchestrators():
+    files = list((ROOT / "connectors").rglob("*.py"))
+    assert len(files) >= 5
+    bad = [(str(f), n) for f in files for n in _imports(f) if n.startswith(CONNECTOR_FORBIDDEN) or ".mutating" in n]
+    assert bad == []
+
+
+def test_connectors_runtime_import_closure_excludes_mutating():
+    r = _run("""
+        import sys, pkgutil, importlib, phishguard.connectors as c
+        for m in pkgutil.iter_modules(c.__path__):
+            importlib.import_module('phishguard.connectors.' + m.name)
+        bad = [m for m in sys.modules if m.startswith('phishguard.mutating') or m in ('phishguard.api', 'phishguard.worker')]
+        print(bad); sys.exit(1 if bad else 0)
+    """)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_scanning_works_with_mutating_blocked():
+    r = _run("""
+        import sys, importlib.abc, pathlib
+        class Block(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path, target=None):
+                if name.startswith('phishguard.mutating'):
+                    raise ImportError('blocked: ' + name)
+        sys.meta_path.insert(0, Block())
+        from phishguard.agent import PhishingAgent
+        from phishguard.config import Settings
+        from phishguard.connectors import Batch, CheckpointStore, MailboxConnector, RawMessage, Scanner
+        from phishguard.llm import MockLLM
+        raw = pathlib.Path('tests/fixtures/phish_bec_auth_fail.eml').read_bytes()
+        class C(MailboxConnector):
+            provider = 'fake'
+            def list_new_messages(self, cursor, limit=50):
+                return Batch([RawMessage('1', raw)], cursor={'n': 1})
+        v = Scanner(C('box'), PhishingAgent(MockLLM(), Settings()), CheckpointStore(), 35).scan().verdicts[0]
+        print(v.status, v.is_phishing); sys.exit(0 if v.is_phishing else 1)
+    """)
+    assert r.returncode == 0, r.stdout + r.stderr
