@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import re
 import unicodedata
 from enum import Enum
@@ -23,6 +24,7 @@ class ActionType(str, Enum):
     CHANGE_ACCOUNT_EMAIL = "change_account_email"
     RESET_PASSWORD = "reset_password"
     CHANGE_ACCOUNT_SETTINGS = "change_account_settings"
+    ADD_MFA_FACTOR = "add_mfa_factor"  # self-service enrollment: approve with current factors, get a one-time token
 
 
 ALWAYS_MFA = frozenset(
@@ -34,6 +36,7 @@ ALWAYS_MFA = frozenset(
         ActionType.CHANGE_ACCOUNT_EMAIL,
         ActionType.RESET_PASSWORD,
         ActionType.CHANGE_ACCOUNT_SETTINGS,
+        ActionType.ADD_MFA_FACTOR,
     }
 )
 
@@ -68,6 +71,16 @@ def normalize_user(raw: str) -> str:
     dodge that user's TOTP enrollment, lockout counter or audit trail."""
     s = unicodedata.normalize("NFKC", str(raw)).translate(_ZERO_WIDTH).translate(_BIDI).strip().casefold()
     return s.encode("utf-8", "replace").decode("utf-8")  # lone surrogates would crash sqlite3 binding
+
+
+def ct_equal(a: Any, b: Any) -> bool:
+    """Constant-time equality that never raises. hmac.compare_digest refuses str with non-ASCII
+    characters (TypeError), which turned a confirm_digest or code like "ü" into an HTTP 500."""
+
+    def enc(x: Any) -> bytes:
+        return str(x).encode("utf-8", "surrogatepass")
+
+    return hmac.compare_digest(enc(a), enc(b))
 
 
 def _walk(obj: Any, depth: int = 0):

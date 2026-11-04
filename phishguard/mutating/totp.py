@@ -7,13 +7,12 @@ last accepted time step per user and only accept a strictly newer step.
 
 from __future__ import annotations
 
-import hmac
 import threading
 import time
 
 import pyotp
 
-from .policy import normalize_user
+from .policy import ct_equal, normalize_user
 
 
 class AlreadyEnrolled(RuntimeError):
@@ -65,7 +64,7 @@ class TOTPManager:
             totp = pyotp.TOTP(secret, interval=self.interval)
             now_step = int(self._clock() // self.interval)
             for step in range(now_step - self.drift, now_step + self.drift + 1):
-                if step > last_step and hmac.compare_digest(totp.generate_otp(step), str(code)):
+                if step > last_step and ct_equal(totp.generate_otp(step), code):
                     self._put(user, secret, step)  # burn this step and every older one
                     return True
             return False
