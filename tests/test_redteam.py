@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from phishguard.api import create_app
 from phishguard.config import Settings
-from phishguard.mutating import CaptureChannel, MFAGateway, TOTPManager
+from phishguard.mutating import CaptureChannel, FactorRegistry, MFAGateway, MFAPolicy, TOTPManager
 from phishguard.mutating.policy import ActionType, normalize_user, requires_mfa
 from phishguard.readonly import EmlTooComplex, analyze_email, parse_eml
 from phishguard.readonly.features import BANK_CHANGE, lookalike_of
@@ -104,10 +104,12 @@ def test_vuln4_lone_surrogates_do_not_crash_api():
 
 def test_vuln5_identity_variants_cannot_downgrade_totp(clock):
     totp = TOTPManager(clock=clock)
-    gw = MFAGateway(channel=CaptureChannel(), totp=totp, clock=clock)
+    gw = MFAGateway(channel=CaptureChannel(), factors=FactorRegistry(totp=totp), clock=clock)
+    dev = MFAGateway(channel=CaptureChannel(), totp=totp, clock=clock, policy=MFAPolicy(dev_single_factor=True))
     totp.enroll("carol")
     for v in ("CAROL", " carol ", "ｃａｒｏｌ", "ca​rol", "car‮ol"):
-        assert gw.submit("transfer_funds", {}, v).method == "totp", v
+        assert gw.submit("transfer_funds", {}, v).factors_available == ["totp"], v
+        assert dev.submit("transfer_funds", {}, v).method == "totp", v
     assert normalize_user("\ud800x") == "?x"
 
 
@@ -153,6 +155,23 @@ def test_vuln10_request_body_size_capped():
     c = _client(max_body_bytes=1000)
     r = c.post("/analyze/eml", content=b'{"raw":"' + b"A" * 5000 + b'"}', headers={"x-api-key": "k"})
     assert r.status_code == 413
+
+
+@pytest.mark.parametrize("dev", [True, False])
+def test_vuln11_non_ascii_digest_or_code_is_403_not_500(dev):
+    """hmac.compare_digest raises TypeError on non-ASCII str; that was an HTTP 500 (also in the old flow)."""
+    from phishguard.mfa_config import MFAConfig
+    from phishguard.mutating.policy import ct_equal
+
+    c = _client(mfa=MFAConfig(dev_single_factor=dev))
+    c.app.state.gateway.factors.totp.enroll("u")
+    H = {"x-api-key": "k"}
+    p = c.post("/actions", json={"action_type": "transfer_funds", "requested_by": "u", "params": {}}, headers=H).json()
+    for code, digest in (("1", "ü"), ("ü", p["confirm_digest"]), ("\ud800", "\udfff")):
+        body = json.dumps({"pending_id": p["pending_id"], "code": code, "confirm_digest": digest})
+        r = c.post("/mfa/verify", content=body, headers={**H, "content-type": "application/json"})
+        assert r.status_code in (403, 409, 422), (code, digest, r.status_code)
+    assert ct_equal("ü", "ü") and not ct_equal("ü", "u") and not ct_equal("\ud800", "x")
 
 
 def test_long_hosts_stay_cheap():
