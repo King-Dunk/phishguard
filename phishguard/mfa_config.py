@@ -25,7 +25,7 @@ class MFAConfig:
     # --- policy ---
     required_factors: int = 2  # distinct methods needed before a pending action is released
     # Password and security questions are both "something you know". By default two of them are not
-    # enough: at least one factor must be TOTP or WebAuthn (NIST SP 800-63B; see DESIGN.md Q43).
+    # enough: at least one factor must be TOTP or WebAuthn (NIST SP 800-63B; see DESIGN.md Q52).
     allow_knowledge_only: bool = False
     # DEV ONLY: the old flow (one TOTP code, or a console code for users without TOTP).
     dev_single_factor: bool = False

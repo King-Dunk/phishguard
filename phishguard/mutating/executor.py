@@ -1,9 +1,10 @@
 """Performs state changes through provider interfaces. Only callable with a gateway-issued grant.
 
 Money and account actions go to a PaymentProvider / AccountProvider (SimulatedBank by default; real
-adapters plug in behind the same interface). Mail actions (quarantine, block, reply...) are recorded
-only. Every call is also appended to `ledger`, the executor's own record of what it was asked to do,
-which the red team reads to prove nothing ran without approval.
+adapters plug in behind the same interface). Mailbox remediation actions go to `handlers`, e.g.
+`mailbox.remediation_handlers()` (quarantine, junk, label, banner, delete, release); without a handler
+a mail action is only recorded (simulated backend). Every call is also appended to `ledger`, the
+executor's own record of what it was asked to do, which the red team reads to prove nothing ran without approval.
 
 The idempotency key handed to providers is derived from the pending action id, so one approved action
 can never move money twice, even if the provider call is retried.
@@ -15,6 +16,7 @@ boundary, run this package as a separate service with its own credentials.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .factors import CATEGORY, EnrollmentGrants
@@ -56,9 +58,14 @@ def _first(params: dict[str, Any], *names: str, default: Any = None) -> Any:
     return default
 
 
+Handler = Callable[[dict[str, Any]], dict[str, Any]]
+
+
 class Executor:
     def __init__(
         self,
+        handlers: Mapping[ActionType, Handler] | None = None,
+        *,
         payments: PaymentProvider | None = None,
         accounts: AccountProvider | None = None,
         grants: EnrollmentGrants | None = None,
@@ -71,6 +78,7 @@ class Executor:
         self.currency = currency
         self.default_account = default_account
         self.ledger: list[dict[str, Any]] = []
+        self.handlers: dict[ActionType, Handler] = dict(handlers or {})
 
     def run(
         self, grant: ExecutionGrant, action: ActionType, params: dict[str, Any], requested_by: str = ""
@@ -79,6 +87,18 @@ class Executor:
             raise PermissionError("missing execution grant")
         key = f"pg-{grant.pending_id or grant.digest}"
         entry: dict[str, Any] = {"action": action.value, "params": params, "digest": grant.digest}
+        handler = self.handlers.get(action)
+        if handler is not None:  # real backend call (mailbox remediation)
+            try:
+                outcome = handler(params)
+                ok = bool(outcome.get("ok", True))
+            except Exception as e:  # noqa: BLE001 - report the failure; never leak secrets in it
+                from ..connectors.secrets import redact
+
+                ok, outcome = False, {"ok": False, "error": redact(f"{type(e).__name__}: {e}")[:300]}
+            entry.update(ok=ok, outcome=outcome)
+            self.ledger.append(entry)
+            return {"ok": ok, "effect_index": len(self.ledger) - 1, "outcome": outcome}
         try:
             out = self._dispatch(action, params, requested_by, key)
             entry.update(ok=True, ref=out.get("transaction_id") or out.get("reference") or out.get("payee_id"))
@@ -145,5 +165,5 @@ class Executor:
             token, exp = self.grants.issue(user, method)
             # the token goes back to the approver only; the ledger entry and the audit log never hold it
             return {"enrollment_token": token, "method": method, "user": user, "expires_at": exp}
-        # mail actions: recorded, nothing else to call in this build
+        # mail actions without a handler: recorded only
         return {"simulated": True}

@@ -7,4 +7,7 @@ webauthn>=2.2,<4
 argon2-cffi>=23.1
 pyyaml>=6.0
 pytest>=8.0
-httpx>=0.27
+httpx>=0.27,<1.0
+# mailbox connectors: RS256 for Google service accounts and Pub/Sub push JWT verification
+PyJWT[crypto]>=2.10,<3
+cryptography>=42,<52

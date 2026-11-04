@@ -186,10 +186,11 @@ class MFAGateway:
         requested_by = normalize_user(requested_by)
         digest = action_digest(action, params, requested_by)
         if not requires_mfa(action, params, reason):
-            self.audit.record("action_executed", action=action.value, digest=digest, by=requested_by, mfa=False)
-            return SubmitResult(
-                "executed", result=self.executor.run(_issue_grant(digest), action, params, requested_by)
+            result = self.executor.run(_issue_grant(digest), action, params, requested_by)
+            self.audit.record(
+                "action_executed", action=action.value, digest=digest, by=requested_by, mfa=False, ok=result["ok"]
             )
+            return SubmitResult("executed", result=result)
 
         key = _op_key(requested_by, action)
         pid = secrets.token_urlsafe(12)
@@ -453,7 +454,7 @@ class MFAGateway:
                 action=p.action.value,
                 digest=p.digest,
                 by=p.requested_by,
-                error=result.get("error"),
+                error=result.get("error") or (result.get("outcome") or {}).get("error", "failed")[:80],
                 factors=list(p.satisfied) or [p.method],
             )
             return result
@@ -464,6 +465,7 @@ class MFAGateway:
             digest=p.digest,
             by=p.requested_by,
             mfa=True,
+            ok=True,
             factors=list(p.satisfied) or [p.method],
         )
         return result

@@ -46,6 +46,8 @@ PROTECTED = (
     "phishguard/mfa_config.py",  # factor policy, WebAuthn RP, payment limits and cooling-off
     "phishguard/routes/",  # /mfa/factor, enrollment and payment routes
     "redteam/virtual_authenticator.py",  # what the passkey attacks sign with
+    "phishguard/connectors/",  # mailbox credentials, read-only boundary, webhook authentication
+    "phishguard/mailbox_guard.py",  # turns verdicts into mailbox actions via the gateway
     "redteam/improve.py",  # this guard itself
     "redteam/runner.py",  # the oracles that judge fixes
     "tests/",  # existing tests are the contract; drafts go to proposals/

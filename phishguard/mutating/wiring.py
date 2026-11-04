@@ -59,10 +59,13 @@ def build_policy(mfa) -> MFAPolicy:
     )
 
 
-def build_gateway(settings, store=None, channel=None, clock=None) -> MFAGateway:
+def build_gateway(settings, store=None, channel=None, clock=None, handlers=None) -> MFAGateway:
+    """`handlers`: real backends for mail actions (mailbox.remediation_handlers); money and account
+    actions always go to the configured providers."""
     clock = clock or time.time
     factors = build_factors(settings.mfa, store, clock)
     executor = Executor(
+        handlers,
         payments=build_payment_provider(settings.payments, store, clock),
         accounts=build_account_provider(settings.payments, store, clock),
         grants=factors.grants,

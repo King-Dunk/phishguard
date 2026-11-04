@@ -5,9 +5,22 @@ description = "Anti-phishing email agent with hard read/write isolation and an M
 requires-python = ">=3.11"
 license = { text = "MIT" }
 readme = "README.md"
-dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2.5", "anthropic>=0.40", "pyotp>=2.9", "pyyaml>=6.0",
-    "webauthn>=2.2,<4", "argon2-cffi>=23.1",
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.5",
+    "anthropic>=0.40",
+    "pyotp>=2.9",
+    "pyyaml>=6.0",
+    "httpx>=0.27,<1.0",
+    "webauthn>=2.2,<4",
+    "argon2-cffi>=23.1",
 ]
+
+[project.optional-dependencies]
+# Gmail service accounts (signed JWT) and Gmail Pub/Sub push verification. OAuth user flows,
+# Microsoft Graph and IMAP need nothing beyond the core dependencies.
+connectors = ["PyJWT[crypto]>=2.10,<3", "cryptography>=42,<52"]
 
 [tool.ruff]
 line-length = 120
