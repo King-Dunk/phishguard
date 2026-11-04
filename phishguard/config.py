@@ -32,6 +32,12 @@ class Settings:
     max_tokens_per_request: int = 8000  # total token budget per /analyze call
     per_call_max_tokens: int = 1024
     phishing_threshold: float = DEFAULT_THRESHOLD
+    # Hybrid "benign vote" (off by default; DESIGN Q67): the LLM may lower a rule score only inside the
+    # gray zone, by at most llm_max_lower points, never below the zone's floor, and never when a hard
+    # security signal fired. Unmeasured with a real model.
+    llm_may_lower: bool = False
+    llm_lower_zone: tuple[float, float] = (20.0, 50.0)
+    llm_max_lower: float = 15.0
     mfa_timeout_seconds: int = 120
     mfa_max_attempts: int = 3
     audit_log_path: str | None = None
@@ -61,6 +67,7 @@ class Settings:
             max_tokens_per_request=int(os.environ.get("PHISHGUARD_MAX_TOKENS", "8000")),
             per_call_max_tokens=int(os.environ.get("PHISHGUARD_PER_CALL_MAX_TOKENS", "1024")),
             phishing_threshold=float(os.environ.get("PHISHGUARD_THRESHOLD", str(DEFAULT_THRESHOLD))),
+            llm_may_lower=os.environ.get("PHISHGUARD_LLM_MAY_LOWER") == "1",
             mfa_timeout_seconds=int(os.environ.get("PHISHGUARD_MFA_TIMEOUT", "120")),
             mfa_max_attempts=int(os.environ.get("PHISHGUARD_MFA_MAX_ATTEMPTS", "3")),
             audit_log_path=os.environ.get("PHISHGUARD_AUDIT_LOG"),

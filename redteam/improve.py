@@ -322,13 +322,13 @@ def build_patch(pattern: str, weight: float, base: pathlib.Path = REPO) -> str:
     Returns "" if either anchor is missing, so a stale generator yields no patch, never a broken one."""
     src = (base / FEATURES).read_text(encoding="utf-8")
     new = src.replace(
-        "RISKY_EXT = (\n",
-        f"# PROPOSED by redteam/improve.py -- review before merging\nSOFT_BEC = re.compile({pattern!r})\nRISKY_EXT = (\n",
+        "KEYWORD_FEATURES = (\n",
+        f"# PROPOSED by redteam/improve.py -- review before merging\nSOFT_BEC = re.compile({pattern!r})\nKEYWORD_FEATURES = (\n",
         1,
     )
     new = new.replace(
-        '        ("prompt_injection_attempt", INJECTION),\n',
-        '        ("prompt_injection_attempt", INJECTION),\n        ("soft_bec_phrasing", SOFT_BEC),\n',
+        '    ("prompt_injection_attempt", ((INJECTION, None),)),\n',
+        '    ("prompt_injection_attempt", ((INJECTION, None),)),\n    ("soft_bec_phrasing", ((SOFT_BEC, None),)),\n',
         1,
     )
     wsrc = (base / WEIGHTS_FILE).read_text(encoding="utf-8")
