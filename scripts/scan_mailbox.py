@@ -151,6 +151,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--password-env")
     ap.add_argument("--password-file")
     ap.add_argument("--oauth", choices=["google", "microsoft"], help="IMAP XOAUTH2 instead of a password")
+    # push notifications (optional; polling works without them)
+    ap.add_argument("--gmail-watch", metavar="TOPIC", help="start Gmail push to projects/<p>/topics/<t> (renew weekly)")
+    ap.add_argument(
+        "--graph-subscribe", metavar="URL", help="create a Graph subscription to https://<host>/webhooks/graph"
+    )
+    ap.add_argument("--client-state-env", help="env var holding the Graph clientState secret for --graph-subscribe")
     a = ap.parse_args(argv)
     install_redaction()
     try:
@@ -169,10 +175,20 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("give --config/--mailbox or --provider")
         s = Settings.from_env()
         conn = build_connector(entry)
+        if a.gmail_watch:
+            r = conn.watch(a.gmail_watch)
+            print(f"Gmail watch active until {r.get('expiration')} (epoch ms); renew before then")
+            return 0
+        if a.graph_subscribe:
+            from phishguard.connectors.secrets import load_secret
+
+            sub = conn.subscribe(a.graph_subscribe, load_secret(env=a.client_state_env or "PG_GRAPH_CLIENT_STATE"))
+            print(f"Graph subscription {sub.get('id')} until {sub.get('expirationDateTime')}; renew before then")
+            return 0
         agent = PhishingAgent(_llm(s), s, DetectionContext(s.trusted_domains, s.executives))
         store = CheckpointStore(a.state_db or ":memory:")
         res = Scanner(conn, agent, store, s.phishing_threshold, s.trusted_authserv_id).scan(a.last)
-    except (ProviderError, SecretError, KeyError, ValueError) as e:
+    except (ProviderError, SecretError, KeyError, ValueError, AttributeError) as e:
         print(f"error: {redact(e)}", file=sys.stderr)
         return 2
     rows = []

@@ -1,0 +1,68 @@
+# PhishGuard mailbox config. Copy to ~/.config/phishguard/mailboxes.yaml (NOT into the repo) and edit.
+# This file holds no secrets: only *_env (environment variable names) and *_file (private files, chmod 600,
+# outside the repository). See docs/MAILBOX_SETUP.md.
+interval_seconds: 300                       # full polling pass; push notifications trigger earlier scans
+limit: 50                                   # max messages per mailbox per pass
+state_db: ~/.local/state/phishguard/scan.db # cursors + seen set (and webhook triggers)
+
+mailboxes:
+  - name: personal-gmail
+    provider: gmail
+    auth:                                   # READ credentials: gmail.readonly
+      type: oauth
+      client_file: ~/.config/phishguard/google-client.json
+      token_file: ~/.config/phishguard/tokens/personal-gmail-read.json
+    # remediation is off unless enabled; it needs its own WRITE credentials (gmail.modify)
+    remediation:
+      enabled: false
+      action: quarantine                    # quarantine | label | banner
+      min_risk: 70
+      quarantine_label: PhishGuard/Quarantine
+      auth:
+        type: oauth
+        client_file: ~/.config/phishguard/google-client.json
+        token_file: ~/.config/phishguard/tokens/personal-gmail-write.json
+
+  - name: workspace-alice
+    provider: gmail
+    auth:
+      type: service_account                 # Google Workspace domain-wide delegation
+      key_file: ~/.config/phishguard/workspace-sa.json
+      subject: alice@example.com
+
+  - name: work-o365
+    provider: graph
+    user: me
+    auth:
+      type: delegated                       # device-code sign-in; token stored in token_file
+      tenant: common
+      client_id: 00000000-0000-0000-0000-000000000000
+      token_file: ~/.config/phishguard/tokens/work-o365-read.json
+
+  - name: org-shared-mailbox
+    provider: graph
+    user: security@contoso.com              # app-only auth needs an explicit mailbox
+    auth:
+      type: client_credentials
+      tenant: contoso.onmicrosoft.com
+      client_id: 00000000-0000-0000-0000-000000000000
+      client_secret_env: PG_GRAPH_CLIENT_SECRET
+
+  - name: icloud
+    provider: imap
+    preset: icloud                          # gmail outlook icloud yahoo aol fastmail zoho qq 163 126 yandex
+    username: you
+    auth:
+      type: password                        # an app-specific password, never your account password
+      password_env: PG_ICLOUD_APP_PASSWORD
+
+# Optional push notifications (served by the API: uvicorn phishguard.api:get_app --factory)
+webhooks:
+  graph:
+    - mailbox: work-o365
+      client_state_env: PG_GRAPH_CLIENT_STATE
+  gmail:
+    audience: https://phishguard.example.com/webhooks/gmail
+    service_account: gmail-push@your-project.iam.gserviceaccount.com
+    mailboxes:
+      you@gmail.com: personal-gmail
