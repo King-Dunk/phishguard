@@ -193,8 +193,8 @@ Remediation runs through the MFA gateway like every other state change, with a *
 | `junk` | Spam | Junk Email | provider's Junk folder | no |
 | `label` | label `PhishGuard/Suspicious` | category | IMAP keyword | no |
 | `banner` | warning copy in Inbox, original quarantined | not supported (use an Exchange transport rule) | warning copy in Inbox, original quarantined | no |
-| delete / release from quarantine | Trash / back to Inbox | Deleted Items / Inbox | Trash / n.a. | **always** |
-| any action on more than 10 messages at once | | | | **always** |
+| delete / release from quarantine | Trash / back to Inbox | Deleted Items / Inbox | Trash / n.a. | **always** (two factors) |
+| any action on more than 10 messages at once | | | | **always** (two factors) |
 
 1. Mint the write credential:
    - **Gmail OAuth:** add the scope `https://www.googleapis.com/auth/gmail.modify` to the consent screen, then run `python scripts/scan_mailbox.py --provider gmail --authorize --write`. It is stored separately in `~/.config/phishguard/tokens-write.json`.
@@ -207,7 +207,7 @@ Remediation runs through the MFA gateway like every other state change, with a *
    ```bash
    python -m phishguard.mailbox_guard --provider gmail --action label --action quarantine
    ```
-   Actions are written to the hash-chained audit log (`PHISHGUARD_DB_PATH` / `PHISHGUARD_AUDIT_LOG`). The worker never approves MFA itself: anything that needs MFA stays pending and is logged.
+   Actions are written to the hash-chained audit log (`PHISHGUARD_DB_PATH` / `PHISHGUARD_AUDIT_LOG`). The worker never approves MFA itself: anything that needs MFA stays pending and is logged. "MFA" here is the same two-factor policy as for payments (two different methods, at least one TOTP or passkey; see the README's MFA section). Approval happens in the process that holds the pending action; the worker has no approval interface yet, so held mailbox actions currently expire unless approved programmatically through `gateway.verify_factor`.
 
 Keep the write credential out of a scan-only deployment entirely. Then a bug or compromise in the scanner can't change mail.
 

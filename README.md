@@ -11,19 +11,21 @@
 ## What is new here
 
 1. **Hard read/write isolation.** Everything that analyzes mail lives in `phishguard/readonly/`. Everything that can change state lives in `phishguard/mutating/`. The LLM is only ever given read-only tools, and the read-only side cannot import the mutating side. Tests prove it.
-2. **MFA enforcement gateway.** Actions touching funds, account changes or invoices are suspended in `mutating/gateway.py`: suspend, double-check (echo the action digest), verify a TOTP or out-of-band code, auto-reject on timeout. Nothing the LLM, the email or the request body says can skip this.
+2. **Multi-factor enforcement gateway.** Actions touching funds, account changes or invoices are suspended in `mutating/gateway.py` and released only after **two different factors** pass (password, security questions, TOTP, passkey/WebAuthn; at least one must not be a knowledge factor), each checked against the echoed action digest, with timeout, attempt limits and lockout. Nothing the LLM, the email or the request body says can skip this.
 3. **Explainable scoring on real mail.** Raw RFC 822 / `.eml` input (multipart, HTML, attachments). Every feature reports its contribution in score points, and the contributions add up to the final score, so an analyst sees *why* a mail scored 68%.
-4. **Red team in a sandbox, with fixes.** 59 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 10 real problems, all fixed with regression tests.
+4. **Red team in a sandbox, with fixes.** 76 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 11 real problems, all fixed with regression tests.
 5. **Self-improvement that cannot touch security code.** `redteam/improve.py` mines missed phishing and drafts rule proposals for a human; patches that touch the MFA gateway are refused by code.
-6. **Hybrid rules + LLM to save money.** Rules handle clear-cut mail for free; only the gray zone (score 20-50, around the default threshold of 35) is sent to the LLM. `evaluate.py` measures the trade-off side by side.
-7. **Mailbox connectors.** Gmail / Google Workspace (Gmail API), Microsoft 365 / Outlook.com (Graph) and any IMAP-over-TLS mailbox can be scanned incrementally with read-only credentials. Quarantine, labels and warning banners are a separate, opt-in write credential behind the same MFA gateway. See [Mailbox connectors](#mailbox-connectors) and [docs/MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md).
+6. **Payments behind open interfaces.** Approved actions go to a `PaymentProvider` / `AccountProvider`. The default `SimulatedBank` has balances, daily and per-transfer limits, idempotency and a cooling-off period for new or changed bank details; documented stubs show where a bank (ISO 20022), Stripe, Xero or MYOB adapter plugs in ([docs/PAYMENTS_INTEGRATION.md](docs/PAYMENTS_INTEGRATION.md)).
+7. **Hybrid rules + LLM to save money.** Rules handle clear-cut mail for free; only the gray zone (score 20-50, around the default threshold of 35) is sent to the LLM. `evaluate.py` measures the trade-off side by side.
+8. **Mailbox connectors.** Gmail / Google Workspace (Gmail API), Microsoft 365 / Outlook.com (Graph) and any IMAP-over-TLS mailbox can be scanned incrementally with read-only credentials. Quarantine, labels and warning banners are a separate, opt-in write credential behind the same MFA gateway (single-message quarantine/junk/label/banner run directly; delete, release and bulk actions wait for two factors). See [Mailbox connectors](#mailbox-connectors) and [docs/MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md).
 
 Production hardening in this version:
 
 | Area | What was added |
 |---|---|
 | Detection | `.eml` parser; trusted `Authentication-Results` (SPF/DKIM/DMARC); From vs Reply-To / Return-Path; display-name brand spoofing; look-alike domains by edit distance, homoglyphs and punycode; link text vs real `href`; dangerous attachments (`.html`, `.iso`, `.lnk`, macro documents) |
-| MFA | TOTP with `pyotp` and `otpauth://` enrollment; one use per time window (anti-replay); 5 consecutive failures lock the operation, audited |
+| MFA | Two distinct factors per action: password (argon2id, per-user lockout), security questions (hashed, random sticky subset, rate limited), TOTP (`pyotp`, one use per window), WebAuthn/passkeys (`py_webauthn`, user verification required, challenge bound to the action digest, sign counter); 5 consecutive failures lock the operation; each factor audited |
+| Payments | `PaymentProvider`/`AccountProvider` interfaces; `SimulatedBank` with limits, cooling-off, idempotency, history (SQLite); adapter stubs for ISO 20022, Stripe, Xero, MYOB, identity providers |
 | Audit | Append-only SHA-256 hash chain, `verify_chain()`, tamper tests for edit / delete / reorder / re-hash, in memory and in SQLite |
 | API | `X-API-Key` auth (constant-time), fail-closed when no keys are configured; per-key rate limit; pending MFA, audit, TOTP and lockouts persisted in SQLite (`sqlite3`, no ORM) |
 | Evaluation | `rules` / `llm` / `hybrid` modes; accuracy, precision, recall, F1, latency, cost per 1k mails |
@@ -35,45 +37,50 @@ flowchart LR
     Client -->|X-API-Key, rate limit| API
     Client -->|/analyze, /analyze/eml| API
     Client -->|/actions| API
-    Client -->|/mfa/verify| API
+    Client -->|/mfa/factor, /mfa/verify| API
     subgraph RO[readonly package - read only]
         TB[ReadOnlyToolbox<br/>get_email / extract_features / check_domain]
         F[feature extraction + risk score]
     end
     subgraph MU[mutating package - state changes]
-        GW[MFA gateway<br/>TOTP / double-check / lockout / timeout]
+        GW[MFA gateway<br/>2 factors / double-check / lockout / timeout]
+        FA[factors<br/>password / questions / TOTP / WebAuthn]
         EX[Executor<br/>needs gateway grant]
+        PP[PaymentProvider / AccountProvider<br/>SimulatedBank or adapter]
         AU[hash-chained audit log]
         DB[(SQLite)]
     end
     API --> AG[Agent<br/>max steps + token breaker]
     AG --> LLM[MockLLM or claude-haiku-5-5]
     AG --> TB --> F
-    API --> GW --> EX
+    API --> GW --> EX --> PP --> DB
+    GW --> FA --> DB
     GW --> AU --> DB
     GW --> DB
-    GW -.out-of-band code.-> User[human / MFA channel]
+    User[human: password, TOTP app, passkey] -.factors.-> API
     RO -. cannot import .-x MU
 ```
 
 ```
 phishguard/
-├── api.py        FastAPI: /analyze /analyze/eml /actions /mfa/* /audit/verify /health
+├── api.py        FastAPI: /analyze /analyze/eml /actions /mfa/enroll /mfa/verify /audit/verify /health
+├── routes/       /mfa/factor, /mfa/challenge, enrollment, read-only /payments/*, /demo/webauthn page
 ├── security.py   API key auth (constant time), rate limiter, body size limit
 ├── agent.py      read-only agent loop with step/token breakers
-├── config.py     settings; API key from environment only
+├── config.py     settings; API key from environment only (mfa_config.py: factors, policy, payments)
 ├── llm/          base, mock (rule-based), anthropic_client
 ├── readonly/     eml parser, features, explainable scoring, read-only tools
 ├── connectors/   READ-ONLY mailbox connectors: gmail, graph, imap (+ presets), oauth, http (backoff),
 │                 secrets (redaction, 0600 token store), state (checkpoints), scanner, worker, webhooks
-├── mutating/     policy, gateway, executor, mfa channel, totp, audit, sqlite store,
-│                 mailbox (quarantine / junk / label / banner / delete / release per provider)
+├── mutating/     policy, gateway, factors (password, questions, totp, webauthn), executor, audit, sqlite store,
+│   │             mailbox (quarantine / junk / label / banner / delete / release per provider)
+│   └── payments/ provider interfaces, SimulatedBank, adapter stubs
 ├── mailbox_guard.py  scan loop + sink that submits remediation through the gateway
 └── dataset/      generator (3 email categories) and evaluate (rules / llm / hybrid)
-redteam/          payloads/*.yaml, runner, docker-compose sandbox, improve.py, report.md
+redteam/          payloads/*.yaml, runner, virtual WebAuthn authenticator, docker-compose sandbox, improve.py, report.md
 proposals/        human-review drafts written by improve.py
 scripts/          download_datasets.py, smoke_real_api.py, scan_mailbox.py
-tests/  examples/  docs/DESIGN.md  docs/MAILBOX_SETUP.md
+tests/  examples/  docs/DESIGN.md  docs/PAYMENTS_INTEGRATION.md  docs/MAILBOX_SETUP.md
 ```
 
 ## Threat model
@@ -90,9 +97,15 @@ tests/  examples/  docs/DESIGN.md  docs/MAILBOX_SETUP.md
 | "ACME Corp HR" `<hr-acme@outlook.com>` | Display-name brand check against trusted domains | `test_eml.py` |
 | Link shows `https://login.acme-corp.com` but goes to `198.51.100.23` | Anchor text vs `href` host comparison | `test_eml.py` |
 | `.html` / `.iso` / `.lnk` / `.docm` attachment | Extension and MIME type lists | `test_eml.py` |
+| Phished password (or password + security answers) used to approve a payment | Two distinct factors required, at least one TOTP or passkey; two knowledge factors stay `pending_mfa` | `test_mfa_factors.py`, red team `pv-mfa-downgrade-knowledge` |
+| Passkey assertion replayed for another action, another user, or from a look-alike site | Challenge single-use and bound to `pending_id` + digest; origin, RP ID, UV flag and sign counter verified | `test_mfa_factors.py`, red team `pv-mfa-webauthn-*` |
+| Brute-forcing security answers or the password | Sticky random question subset, 3 failed challenges/hour per user; 5 wrong passwords lock the password for that user | `test_mfa_factors.py`, red team `pv-mfa-*-bruteforce` |
+| Known password used to reset the lockout between TOTP guesses | Only a full release resets the failure counter | `test_mfa_hardening.py`, red team `pv-mfa-lockout-reset` |
+| Both factors sent at once to run a payment twice | One lock around verification; state flips before the provider call; idempotency key from the pending id | `test_mfa_factors.py`, red team `pv-mfa-concurrent-release` |
+| "Our bank details changed" + urgent invoice (BEC), approved by a fooled employee | Cooling-off: no payment to new or changed payee details for 24 h; per-transfer and daily limits | `test_payments.py`, red team `pv-pay-bec-cooling-off`, `pv-pay-limit-split` |
 | Guessing an MFA code | 3 failures reject the action; 5 consecutive failures across actions lock that operation (user + action type) for 15 min, audited | `test_mfa_hardening.py` |
 | Replaying a TOTP code seen in the same 30 s window | Last used time step stored per user; only newer steps accepted; persisted across restart | `test_mfa_hardening.py` |
-| Re-enrolling someone else's TOTP to take it over | Enrollment refused if the user already has a secret (409) | `test_mfa_hardening.py`, `test_api_security.py` |
+| Re-enrolling someone else's TOTP to take it over | Enrollment refused if the user already has a secret (409); every factor's enrollment needs an admin key or a single-use token bound to the user and method | `test_mfa_hardening.py`, `test_api_security.py`, `test_payments.py` |
 | Approver never answers | Auto-reject on timeout with an audit event | `test_mfa_gateway.py`, `test_api.py` |
 | Editing, deleting or reordering audit rows (memory or SQLite) | SHA-256 hash chain; `verify_chain()` and `/audit/verify` report the first broken entry | `test_mfa_hardening.py` |
 | Unauthenticated caller / key brute force | `X-API-Key` checked in constant time; failed attempts rate limited per address; server refuses to start without keys | `test_api_security.py` |
@@ -107,39 +120,54 @@ tests/  examples/  docs/DESIGN.md  docs/MAILBOX_SETUP.md
 
 ## Demo
 
-Real output of `bash examples/run_demo.sh` (MockLLM, API key auth on, SQLite persistence, MFA timeout 3 s). Also see `examples/curl_demo.sh`.
+Real output of `bash examples/run_demo.sh` (MockLLM, API key auth on, SQLite persistence, two-factor policy, MFA timeout 5 s). The passkey in this script is the software authenticator from `redteam/`; for a real Touch ID prompt see [Try the two-factor flow on a Mac](#try-the-two-factor-flow-on-a-mac). Also see `examples/curl_demo.sh`.
 
 ```text
 == 0. no API key is refused
-<- HTTP 401 {"detail":"missing or invalid API key"}
+<- HTTP 401 {'detail': 'missing or invalid API key'}
+
 == 1. analyze phishing email
-<- HTTP 200 risk=96.6% is_phishing=True
-   top contributions: lookalike_domain +22.8; auth_fail +19.8; low_reputation +12.3; reply_to_mismatch +10.2
+<- risk=96.7% is_phishing=True
+   top contributions: lookalike_domain +22.6; auth_fail +19.7; reply_to_mismatch +12.2; low_reputation +12.2
 
-== 1b. analyze raw .eml (phish_punycode_homoglyph.eml)
-<- HTTP 200 risk=68.0%
-   homoglyph_domain: +54.7 (xn--cme-corp-06g.com renders as acme-corp.com, spoofing acme-corp.com)
-   payment_keywords: +13.3 (matched 'bank account')
+== 2. alice enrolled four factors (admin key)
+<- HTTP 200 {'user': 'alice', 'enrolled': ['password', 'security_questions', 'totp', 'webauthn'], 'policy': {'mode': 'multi_factor', 'required': 2, 'non_knowledge_required': True}, 'can_approve': True}
 
-== 2. transfer_funds is suspended by the MFA gateway
-<- HTTP 202 {"status":"pending_mfa","pending_id":"2RZ_lqMEscigGQRj","confirm_digest":"dc915601d5657cc0","summary":"transfer_funds (digest dc915601d5657cc0) requested by alice","expires_at":1793678831.2632627,"mfa_method":"channel","next":"POST /mfa/verify with the out-of-band code and confirm_digest"}
+== 3. transfer_funds 50,000 AUD is suspended by the MFA gateway
+<- HTTP 202 {'status': 'pending_mfa', 'confirm_digest': 'ec8da7e44b5dd2bb', 'factors_available': ['password', 'security_questions', 'totp', 'webauthn'], 'mfa_policy': {'mode': 'multi_factor', 'required': 2, 'non_knowledge_required': True}}
 
-== 3. wrong code is rejected
-<- HTTP 403 {"detail":{"error":"verification failed (bad_code)","attempts_left":2}}
+== 4. wrong password is rejected
+<- HTTP 403 {'detail': {'error': 'verification failed (bad_password)', 'attempts_left': 2}}
 
-== 4. correct out-of-band code + digest echo is released
-<- HTTP 200 {"status":"executed","result":{"ok":true,"effect_index":0}}
+== 5. right password: still HELD (1 of 2 factors)
+<- HTTP 202 {'status': 'pending_mfa', 'pending_id': 'ZTkEEEOafHcoYNdg', 'accepted': 'password', 'factors_satisfied': ['password'], 'factors_remaining': 1, 'needs_non_knowledge': True, 'factors_available': ['security_questions', 'totp', 'webauthn'], 'next': 'one more factor required, and it must be totp or webauthn (two knowledge factors are not enough)'}
 
-== 5. second transfer, then wait 4.0s without verifying
+== 6. + security questions: still HELD (two knowledge factors are not enough)
+<- HTTP 202 {'status': 'pending_mfa', 'pending_id': 'ZTkEEEOafHcoYNdg', 'accepted': 'security_questions', 'factors_satisfied': ['password', 'security_questions'], 'factors_remaining': 1, 'needs_non_knowledge': True, 'factors_available': ['totp', 'webauthn'], 'next': 'one more factor required, and it must be totp or webauthn (two knowledge factors are not enough)'}
 
-==    late (correct) code after timeout is rejected
-<- HTTP 410 {"detail":"MFA timed out; action rejected"}
+== 7. + TOTP code from the authenticator app: RELEASED
+<- HTTP 200 {'status': 'executed'}
+   tx_9b4d92e7aeab751e: 50000.00 AUD -> ACME-VENDOR, idempotency key pg-ZTkEEEOafHcoYNdg
 
-== 6. TOTP enrollment returns an otpauth:// URI (secret redacted here)
-<- HTTP 200 {"user":"carol","otpauth_uri":"otpauth://totp/PhishGuard:carol?secret=<redacted>&issuer=PhishGuard"}
+== 8. second transfer: password + passkey (challenge bound to this action): RELEASED
+<- HTTP 200 {'status': 'executed', 'factors': ['password', 'webauthn']}
 
-== 7. audit hash chain verifies
-<- HTTP 200 {"chain_ok":true,"first_broken":null}
+==    replaying that passkey assertion is refused
+<- HTTP 409 {'detail': '2IMMh-lTLm6Cf-nX is already executed'}
+
+== 9. 'our bank details changed' + urgent invoice: MFA passes, bank holds it (cooling-off)
+<- HTTP 422 {'status': 'declined', 'result': {'ok': False, 'error': 'cooling_off', 'message': 'payee ACME-VENDOR details changed recently; payments held until cooling-off ends', 'retryable': False, 'payee_id': 'ACME-VENDOR', 'until': 1793839439.662009, 'effect_index': 3}, 'factors': ['password', 'webauthn']}
+
+== 10. another transfer, then wait 6.0s without approving
+
+==     late password after timeout is rejected
+<- HTTP 410 {'detail': 'MFA timed out; action rejected'}
+
+== 11. balances
+<- HTTP 200 {'provider': 'simulated', 'accounts': [{'id': 'OPERATING', 'name': 'Operating account', 'currency': 'AUD', 'balance': '198800.00', 'daily_limit': '100000.00', 'daily_used': '51200.00'}, {'id': 'PAYROLL', 'name': 'Payroll account', 'currency': 'AUD', 'balance': '80000.00', 'daily_limit': '100000.00', 'daily_used': '0.00'}]}
+
+== 12. audit hash chain verifies
+<- HTTP 200 {'chain_ok': True, 'first_broken': None}
 ```
 
 ## Quick start
@@ -175,8 +203,47 @@ docker build -t phishguard . && docker run -p 8000:8000 -e PHISHGUARD_API_KEYS=c
 | `PHISHGUARD_ADMIN_KEYS` | none | keys allowed to call `/mfa/enroll` (enrollment is refused without one) |
 | `PHISHGUARD_OPEN_ENROLLMENT` | unset | `1` lets any client key enroll; development only |
 | `PHISHGUARD_MAX_BODY_BYTES` | 3000000 | request body cap (413) |
+| `PHISHGUARD_MFA_REQUIRED_FACTORS` | 2 | distinct factors needed to release an action (2-4) |
+| `PHISHGUARD_MFA_ALLOW_KNOWLEDGE_ONLY` | unset | `1` lets password + security questions release an action (not recommended) |
+| `PHISHGUARD_MFA_DEV_SINGLE_FACTOR` | unset | `1` restores the old one-code flow (TOTP or console code); development only |
+| `PHISHGUARD_PASSWORD_LOCKOUT_THRESHOLD`, `_SECONDS` | 5, 900 | wrong passwords per user before the password locks, and for how long |
+| `PHISHGUARD_QUESTIONS_PER_CHALLENGE`, `PHISHGUARD_QUESTIONS_MAX_FAILURES` | 2, 3 | questions asked per challenge; failed challenges per user per hour |
+| `PHISHGUARD_WEBAUTHN_RP_ID`, `PHISHGUARD_WEBAUTHN_ORIGINS`, `PHISHGUARD_WEBAUTHN_RP_NAME` | `localhost`, `http://localhost:8000`, `PhishGuard` | passkey relying party; the origin must match the URL in the browser exactly |
+| `PHISHGUARD_PAYMENT_PROVIDER` | `simulated` | `simulated`, or a stub: `iso20022`, `stripe`, `xero`, `myob` (they decline with `provider_not_implemented`) |
+| `PHISHGUARD_COOLING_OFF_SECONDS` | 86400 | no payments to new or changed bank details for this long |
+| `PHISHGUARD_DAILY_LIMIT`, `PHISHGUARD_PER_TRANSFER_LIMIT` | 100000.00, 60000.00 | simulated bank limits (per account per UTC day; per transfer) |
+| `PHISHGUARD_CURRENCY`, `PHISHGUARD_PAYMENTS_SEED` | `AUD`, `1` | account currency; seed demo accounts/payees/invoices into an empty bank |
 
-MFA: users enrolled via `POST /mfa/enroll` approve with their authenticator app (TOTP). Users not enrolled fall back to the `MFAChannel`; the default one prints the code on the server console and is for development only.
+### MFA: two factors per sensitive action
+
+A suspended action is released after **two different methods** pass (`PHISHGUARD_MFA_REQUIRED_FACTORS`), and by default at least one of them must be TOTP or a passkey:
+
+| Method | Category | How it is checked |
+|---|---|---|
+| `password` | knowledge | argon2id hash, constant-time verify, 5 wrong tries lock the password for that user (15 min) |
+| `security_questions` | knowledge | answers normalized and argon2id-hashed; random subset per challenge (sticky until answered); 3 failed challenges/hour per user |
+| `totp` | possession | authenticator app code, one use per 30 s window |
+| `webauthn` | possession + on-device biometric/PIN | passkey assertion with `userVerification: "required"`; challenge bound to this action's digest, single use; origin, RP ID, sign counter verified |
+
+Why password + security questions isn't enough: both are "something you know", so one phishing form can collect both; NIST SP 800-63B counts a memorized secret as one factor and doesn't accept knowledge-based questions as an authenticator. `PHISHGUARD_MFA_ALLOW_KNOWLEDGE_ONLY=1` overrides this; see DESIGN.md Q52. Every attempt goes into the audit chain as method + result, never the secret. All methods share the per-action attempt limit and the per-operation lockout, and only a full approval resets the lockout counter.
+
+Enrollment needs an admin key (or `PHISHGUARD_OPEN_ENROLLMENT=1` in development). A user who already has two factors can add another without an admin: submit `add_mfa_factor {"method": "webauthn"}`, approve it, and send the returned single-use `enrollment_token` as `X-Enrollment-Token`. Users with too few factors are still suspended (`approvable: false`) and can't be approved; there is no console-code fallback unless `PHISHGUARD_MFA_DEV_SINGLE_FACTOR=1` (development only).
+
+### Try the two-factor flow on a Mac
+
+1. Start the server (Python 3.11+):
+   ```bash
+   pip install -r requirements.txt
+   PHISHGUARD_API_KEYS=dev-key PHISHGUARD_ADMIN_KEYS=dev-admin PHISHGUARD_DB_PATH=/tmp/pg.db \
+     uvicorn phishguard.api:get_app --factory --port 8000
+   ```
+2. Open **http://localhost:8000/demo/webauthn** in Safari or Chrome (`localhost`, not `127.0.0.1`: browsers refuse an IP as a passkey RP ID; for another port set `PHISHGUARD_WEBAUTHN_ORIGINS=http://localhost:<port>`).
+3. Enter API key `dev-key`, admin key `dev-admin`, a user name; set a password; click **Register a passkey** and confirm with Touch ID (or choose iCloud Keychain / a phone).
+4. Click **Submit transfer_funds**: the response is `202 pending_mfa`.
+5. **Approve with password**: `202`, still held, "one more factor required, and it must be totp or webauthn".
+6. **Approve with passkey**: Touch ID prompt, then `200 executed` with a transaction id; **Balances & history** shows the debit.
+
+The same in a terminal without a browser: `bash examples/run_demo.sh` (software passkey + TOTP via `pyotp`), or `examples/curl_demo.sh` with your own authenticator app.
 
 ### Real API smoke test
 
@@ -197,12 +264,21 @@ All routes except `/health` need header `X-API-Key`. Missing or wrong key: 401; 
 | `GET /health` | status, version, mode, model, auth and persistence mode |
 | `POST /analyze` | body `{"email": {...}}`; returns `risk_percent`, `is_phishing` (risk >= `threshold`, default 35), `threshold`, `features[{name, weight, evidence, contribution}]` sorted by contribution, `explanation`, `steps_used`, `tokens_used`, `circuit_break` |
 | `POST /analyze/eml` | body `{"raw": "<RFC 822 text>"}` (max 2 MB, else 413); same output plus `parsed` (from, reply-to, return-path, SPF/DKIM/DMARC, attachment metadata) |
-| `POST /actions` | body `{action_type, params, requested_by, reason}`; 200 executed, or 202 `pending_mfa` with `pending_id`, `confirm_digest`, `mfa_method` (`totp` or `channel`); 400 unknown action; 423 operation locked |
-| `POST /mfa/enroll` | admin key only; body `{user}`; returns `otpauth_uri` (render as QR); 403 without admin key, 409 if already enrolled |
-| `POST /mfa/verify` | body `{pending_id, code, confirm_digest}`; 200 executed, 403 failed (`attempts_left`), 404 unknown, 409 finished, 410 timed out, 423 locked |
+| `POST /actions` | body `{action_type, params, requested_by, reason}`; 200 executed, or 202 `pending_mfa` with `pending_id`, `confirm_digest`, `mfa_policy`, `factors_available`, `approvable`; 400 unknown action; 423 operation locked |
+| `POST /mfa/enroll` | TOTP; admin key or `X-Enrollment-Token`; body `{user}`; returns `otpauth_uri` (render as QR); 403 without, 409 if already enrolled |
+| `POST /mfa/verify` | body `{pending_id, code, confirm_digest}`: the TOTP factor. 202 accepted but more factors needed, 200 executed, 422 declined by the provider, 403 failed (`attempts_left`), 400 TOTP not enrolled, 404 unknown, 409 finished, 410 timed out, 423 locked |
+| `POST /mfa/challenge` | body `{pending_id, confirm_digest, method}`; `webauthn` returns `publicKey` options (challenge bound to the action), `security_questions` returns the questions to answer |
+| `POST /mfa/factor` | body `{pending_id, confirm_digest, method, response}`; `response` is `{password}`, `{code}`, `{answers: {id: answer}}` or `{credential}` (WebAuthn JSON). Same status codes as `/mfa/verify`; 409 if this method already passed; 423 also when a method's own limiter is active |
+| `GET /mfa/pending/{id}` | state, factors satisfied / remaining / available |
+| `GET /mfa/factors/{user}` | enrolled methods, policy, `can_approve` |
+| `POST /mfa/enroll/password` | admin key or `X-Enrollment-Token`; body `{user, password}`; 409 already set, 422 weak |
+| `POST /mfa/enroll/questions` | admin key or token; body `{user, questions: [{question, answer}]}` (3-10) |
+| `POST /mfa/webauthn/register/options`, `/verify` | options: admin key or token, body `{user}`; verify: body `{user, credential}` (bound by the single-use registration challenge) |
+| `GET /payments/accounts`, `/payments/accounts/{id}/transactions`, `/payments/transactions/{id}`, `/payments/payees/{id}` | read-only balances, history, status, payee (masked account, cooling-off) |
+| `GET /demo/webauthn` | no key; browser demo page, served only when the RP ID is `localhost` |
 | `GET /audit/verify` | `{chain_ok, first_broken}` |
 
-Always-MFA actions: `transfer_funds`, `pay_invoice`, `approve_invoice`, `change_bank_details`, `change_account_email`, `reset_password`, `change_account_settings`, `delete_email`, `release_from_quarantine`. Mailbox actions on more than 10 messages at once also need MFA. Others run directly unless their params or reason mention money or accounts.
+Always-MFA actions (two factors): `transfer_funds`, `pay_invoice`, `approve_invoice`, `change_bank_details`, `change_account_email`, `reset_password`, `change_account_settings`, `add_mfa_factor`, `delete_email`, `release_from_quarantine`. Mailbox actions on more than 10 messages at once also need MFA. Others run directly unless their params or reason mention money or accounts. Payment params: `transfer_funds {amount, payee_id, from_account?, currency?, reference?}`, `pay_invoice` / `approve_invoice {invoice_id}`, `change_bank_details {payee_id, account_name, bsb + account_number | iban, bic?}`. The simulated bank is seeded with accounts `OPERATING` / `PAYROLL`, payees `ACME-VENDOR` / `GLOBEX` and invoices `INV-1001` / `INV-1002`.
 
 ## Mailbox connectors
 
@@ -329,7 +405,7 @@ Each change and its evidence is in `docs/DESIGN.md` (Q31-Q39). In short:
 
 ## Red Team Results
 
-`redteam/` holds 59 attacks in four YAML files (`payloads/`), a runner, and a Docker sandbox.
+`redteam/` holds 76 attacks in five YAML files (`payloads/`), a runner, and a Docker sandbox.
 
 ```bash
 python -m redteam.runner                      # in-process, writes redteam/report.md (pytest runs this)
@@ -340,15 +416,15 @@ Sandbox: the API container runs as uid 10001 with a read-only root filesystem, `
 
 After every attack the runner checks: **no MFA bypass** (no money/account action reached the executor without an approval the runner made itself), **SQL parameterized** (every statement SQLite ran is a string literal in `store.py`; the connection is wrapped to record them), **DB integrity** (`PRAGMA integrity_check`, same tables, audit chain intact), **no crash** (no 5xx, `/health` answers), **no injected response headers**, and **no stray files**. Payloads can add expectations such as minimum risk, status code or a time limit. The runner itself drives a compromised LLM that obeys the mail and calls money tools.
 
-Results (`redteam/report.md`, in-process; the Docker run gives the same totals):
+Results (`redteam/report.md`, in-process). The Docker run gave the same totals for the original 59 attacks. It has not been re-run for the 17 new ones; their passkey flows sign with the software authenticator over HTTP, so they don't need in-process access, but the `executed_once` and audit-secret checks only run in-process.
 
 | Category | Attacks | Security invariants held | Detection met | Interception rate |
 |---|---|---|---|---|
 | a) Prompt injection (body, subject, filename, hidden HTML, zero-width, Base64, Chinese, fullwidth, fake tool markup) | 12 | 12/12 | 12/12 | 100% |
-| b) Privilege escalation / MFA bypass (no/bad key, bypass flags, deep params, forged codes, swapped digest, TOTP replay, cross-user approval, identity variants, enrollment takeover, brute force) | 17 | 17/17 | n/a | 100% |
+| b) Privilege escalation / MFA bypass (no/bad key, bypass flags, deep params, forged codes, swapped digest, TOTP replay, cross-user approval, identity variants, enrollment takeover, brute force; passkey replay across actions/users, phishing origin, no UV, cloned key, knowledge-only downgrade, same factor twice, question/password brute force, lockout reset, concurrent release, enrollment-token misuse, BEC cooling-off, limit splitting, non-ASCII inputs, secrets in audit) | 34 | 34/34 | n/a | 100% |
 | c) Injection & DoS (SQL into every SQLite field, path traversal, 4 MB body, MIME bombs, 50k-deep JSON, ReDoS, CRLF, RTL override, lone surrogates) | 20 | 20/20 | 5/5 | 100% |
 | d) Detection evasion (homoglyphs, split words, leetspeak, image-only, polite BEC) | 10 | 10/10 | 6/10 | 60% |
-| **Total** | 59 | **59/59** | | **93%** |
+| **Total** | 76 | **76/76** | | **95%** |
 
 The 4 misses are all in (d): an image-only lure and three polite BEC mails with no money keywords. They are detection gaps, not breaches, and they feed the self-improvement step below.
 
@@ -368,6 +444,7 @@ Each was confirmed against the code before the fix and has a regression test in 
 | 8 | `evil.exe\u200b`, `run.lnk.`, `doc.docm ` attachment names; RTL override names | Dangerous attachment not flagged | Filenames normalized the way Windows treats them; bidi controls raise `header_anomaly` |
 | 9 | Two addresses in `From` (trusted one first); Cyrillic "Асme Corp" display name | Mail treated as from the trusted domain / brand spoof missed | `header_anomaly` feature; homoglyph folding in brand matching |
 | 10 | Any client key could call `/mfa/enroll` | Attacker enrolls a victim's TOTP first, then approves as the victim | Enrollment needs an admin key (`PHISHGUARD_ADMIN_KEYS`); fail-closed from env |
+| 11 | Non-ASCII `confirm_digest` or code (`"ü"`) on an existing pending action | HTTP 500: `hmac.compare_digest` raises `TypeError` on non-ASCII `str` (the old Unicode payloads only reached unknown ids, 404) | `ct_equal()` compares UTF-8 bytes; `pv-mfa-nonascii-inputs` |
 
 Hardening found on the way (not exploitable before, fixed anyway): no request body limit (now 3 MB, 413), 2000-char hostnames made look-alike checks slow (now capped at 253, the DNS limit), split/leetspeak keywords (`w i r e`, `b@nk`) are now de-obfuscated, and a budget-guard bug in `improve.py` under-counted input tokens (now an upper bound with a stop on overbilling).
 
@@ -389,26 +466,34 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 ## Known limitations
 
 - The execution grant is an in-process guard. It stops the LLM and accidental calls, not malicious code in the same process. A real boundary needs the mutating side as a separate service with its own credentials.
-- TOTP secrets are stored unencrypted in SQLite; production needs envelope encryption (KMS) or an HSM. Enrollment needs an admin key but is not yet tied to SSO identity.
+- TOTP secrets are stored unencrypted in SQLite; production needs envelope encryption (KMS) or an HSM. Enrollment needs an admin key (or a token from an approved `add_mfa_factor`) but is not yet tied to SSO identity. There are no reset/recovery flows for lost factors yet; an administrator has to edit the store.
+- WebAuthn was tested with a software authenticator (`redteam/virtual_authenticator.py`, real ES256/CBOR verified by py_webauthn) and once, manually, with Chromium's DevTools virtual authenticator driving `/demo/webauthn`. **Not tested with a physical Touch ID / Face ID / security key.** Registration uses `attestation: none`, so the server doesn't check which authenticator model was used; the RP ID defaults to `localhost` (demo only).
+- Security questions are a weak factor however they are stored; they are offered for compatibility and can never release an action alone or together with the password under the default policy.
+- The gateway verifies factors under one process-wide lock (argon2 takes ~20 ms), which serializes approvals; fine for a single instance, not for high volume.
+- Payments are simulated (`SimulatedBank`); the ISO 20022, Stripe, Xero, MYOB and identity-provider adapters are documented stubs with no network calls, never tested against a real provider.
 - API keys are shared service keys, not per-user identity; `requested_by` is still caller-supplied.
 - Rate limits and the SQLite store are per process. Multiple workers or hosts need Redis/Postgres.
 - Detection is rule-based with hand-set weights; real-LLM behavior is unmeasured. On real mail, recall at the default threshold is 60.8% with hard_ham FPR 56.1% (test split, local run).
 - Polite BEC with no money keywords and image-only lures are still missed (see red-team report); `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
-- No banking or MFA push integrations; money/account actions are simulated by an in-memory ledger.
+- No real mail, banking or MFA push integrations; money moves only inside the simulated bank.
 - **Mailbox connectors were tested only against offline fakes**, written from the providers' public documentation. They have not been run against a real Gmail, Microsoft 365, Outlook.com or IMAP account, so error codes, paging edge cases and provider quirks (consent screens, NetEase/QQ behavior, Graph moves with immutable IDs) are unverified.
 - Gmail OAuth apps in "Testing" status get refresh tokens that expire after 7 days, and `gmail.readonly` is a restricted scope (Google verification is needed to publish). Personal use means re-authorizing weekly; Workspace "Internal" apps or a service account avoid this.
 - IMAP has no read-only credential: an app password can do anything. Read-only scanning is enforced in code (`EXAMINE`, `BODY.PEEK[]`, tests), not by the provider.
 - Graph cannot rewrite a received message, so warning banners there are unsupported (use an Exchange transport rule). IMAP "release from quarantine" isn't implemented. Without UIDPLUS, IMAP moves leave the original flagged `\Deleted` rather than risk a plain `EXPUNGE`.
 - The checkpoint store and polling worker are single-process; one worker per mailbox.
+- Held mailbox actions (delete, release, bulk) need two factors, but only the process that created them can approve them: the API loads pending actions from SQLite at startup and has no remediation credentials, and `mailbox_guard` has no approval interface yet. Until a shared approval service exists they expire unless approved programmatically.
 
 ## Roadmap
 
 - Run the mutating side as a separate service with mTLS and its own credentials.
-- Shared store (Postgres/Redis) for multi-instance deployments; KMS-encrypted TOTP secrets; WebAuthn/push MFA.
+- Shared store (Postgres/Redis) for multi-instance deployments; KMS-encrypted TOTP secrets and password hashes with a pepper; per-action locks instead of one gateway lock.
+- Test passkeys on real devices (Touch ID, Windows Hello, a FIDO2 key) and add attestation checks for managed devices; factor recovery and admin reset flows with their own audit trail.
+- Implement one real payment adapter against a provider sandbox (Stripe test mode or a bank's ISO 20022 sandbox), with Confirmation-of-Payee style name checks on bank-detail changes.
+- Bind approvers to SSO identity, and require a *different* person to approve payments above a threshold (dual control).
 - **Hybrid on real mail (next step).** Call the LLM only when the rule score is in the gray zone 20-50 (now the default for `--modes hybrid`). That band holds both the missed phishing at threshold 35 and most of the flagged hard_ham, so it's where an LLM's reading of intent can add separation, and clear-cut mail stays free. Plan: run `--dataset external --split --modes rules,hybrid` locally and compare recall at 1% easy_ham FPR and hard_ham FPR against the rules row. One design caveat: today the LLM can only raise a score (injection floor), so it can recover misses but cannot clear hard_ham false positives. Lowering a score needs a separate, injection-resistant path (e.g. LLM "benign" votes may lower only within 20-50 and never below the content-only floor), with red-team tests first.
 - Calibrate on a modern legitimate-mail corpus, so era artifacts stop mattering.
 - Mailbox connectors: run against real Gmail, Microsoft 365, Outlook.com and a few IMAP providers (iCloud, Fastmail, QQ, 163) and fix whatever the fakes got wrong; add certificate credentials for Graph app-only auth; a shared checkpoint store for several workers; per-mailbox rate budgets for large tenants.
 
 ## 中文简介
 
-PhishGuard 是一个防钓鱼邮件 Agent。最新一轮：红队沙箱（59 个攻击载荷，Docker 隔离或进程内运行）找到并修复了 10 个真实漏洞，包括深层嵌套参数绕过 MFA、TOTP 被大小写变体降级、MIME 炸弹和孤立代理字符导致崩溃、正则回溯拒绝服务；自我改进脚本只生成提案，碰到 MFA 相关代码的补丁直接拒绝；公开数据集脚本已交付，但因构建环境网络受限尚未运行。上一轮做了生产级加固：解析真实 .eml 邮件并给出每个特征的贡献分；MFA 改为 TOTP，带防重放和 5 次失败锁定；审计日志是 SHA-256 哈希链；API 有 Key 认证、限流和 SQLite 持久化；评测对比规则、LLM、混合三种模式（混合模式只把灰区邮件交给 LLM，用来省钱）。核心设计是两点：**读写硬隔离**（分析邮件的包和执行操作的包互相独立，只读侧在代码层面无法 import 变更侧，测试已证明）和 **MFA 强制拦截网关**（涉及资金、账户变更、发票的操作在代码里被挂起，要二次确认和带外验证码，超时自动拒绝，LLM 输出无法绕过）。测试和评测全部使用 MockLLM，不调用真实 API。数据集为合成数据，指标只作回归基线。新增邮箱连接器：Gmail / Google Workspace（Gmail API，只读权限 gmail.readonly）、Microsoft 365 / Outlook.com（Graph，Mail.Read）和通用 IMAP（仅 TLS，内置 iCloud、Yahoo、QQ 邮箱、163/网易、Zoho 等预设，支持授权码和 XOAUTH2），增量、幂等地拉取并扫描邮件；隔离、加标签、加警告横幅等操作需要单独开启的写权限凭据，并经过同一个 MFA 网关（删除和放行隔离邮件必须 MFA）。连接器目前只在离线模拟环境中测试过，尚未连接真实账户。配置步骤见 [docs/MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md)。详细设计见 [docs/DESIGN.md](docs/DESIGN.md)。
+PhishGuard 是一个防钓鱼邮件 Agent。最新一轮：敏感操作改为**双因素审批**（密码、安全问题、TOTP、通行密钥/WebAuthn 中任选两种不同方式，且至少一种不是“知道的东西”；通行密钥的挑战值绑定到具体操作的摘要，防止重放），并把转账等操作接到可替换的支付接口后面（模拟银行带每日限额、幂等键和新收款账户冷静期，另附银行 ISO 20022、Stripe、Xero、MYOB 的接口桩）；红队新增 17 个攻击，76/76 安全不变量成立。上一轮：红队沙箱（59 个攻击载荷，Docker 隔离或进程内运行）找到并修复了 10 个真实漏洞，包括深层嵌套参数绕过 MFA、TOTP 被大小写变体降级、MIME 炸弹和孤立代理字符导致崩溃、正则回溯拒绝服务；自我改进脚本只生成提案，碰到 MFA 相关代码的补丁直接拒绝；公开数据集脚本已交付，但因构建环境网络受限尚未运行。更早一轮做了生产级加固：解析真实 .eml 邮件并给出每个特征的贡献分；MFA 改为 TOTP，带防重放和 5 次失败锁定；审计日志是 SHA-256 哈希链；API 有 Key 认证、限流和 SQLite 持久化；评测对比规则、LLM、混合三种模式（混合模式只把灰区邮件交给 LLM，用来省钱）。核心设计是两点：**读写硬隔离**（分析邮件的包和执行操作的包互相独立，只读侧在代码层面无法 import 变更侧，测试已证明）和 **MFA 强制拦截网关**（涉及资金、账户变更、发票的操作在代码里被挂起，要二次确认和双因素验证，超时自动拒绝，LLM 输出无法绕过）。测试和评测全部使用 MockLLM，不调用真实 API。数据集为合成数据，指标只作回归基线。新增邮箱连接器：Gmail / Google Workspace（Gmail API，只读权限 gmail.readonly）、Microsoft 365 / Outlook.com（Graph，Mail.Read）和通用 IMAP（仅 TLS，内置 iCloud、Yahoo、QQ 邮箱、163/网易、Zoho 等预设，支持授权码和 XOAUTH2），增量、幂等地拉取并扫描邮件；隔离、加标签、加警告横幅等操作需要单独开启的写权限凭据，并经过同一个 MFA 网关（删除、放行隔离邮件和批量操作必须双因素验证）。连接器目前只在离线模拟环境中测试过，尚未连接真实账户。配置步骤见 [docs/MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md)。详细设计见 [docs/DESIGN.md](docs/DESIGN.md)。

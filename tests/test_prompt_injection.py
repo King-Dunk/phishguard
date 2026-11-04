@@ -107,14 +107,15 @@ def test_unknown_top_level_bypass_fields_rejected(client):
 
 def test_injection_text_as_mfa_code_fails(client):
     c, gw, ch = client
+    gw.factors.totp.enroll("x")
     p = c.post("/actions", json={"action_type": "pay_invoice", "requested_by": "x", "params": {}}).json()
     for guess in ("approved", INJECTION[:16], "000000"):
         r = c.post(
             "/mfa/verify", json={"pending_id": p["pending_id"], "code": guess, "confirm_digest": p["confirm_digest"]}
         )
-        assert r.status_code == 403 or r.json().get("status") == "executed"
-        if r.status_code == 200:  # 1-in-a-million chance the guess equals the code
-            return
+        assert r.status_code in (403, 202)
+        if r.status_code == 202:  # 1-in-a-million chance the guess equals the code: still only one factor
+            break
     assert gw.executor.ledger == []
 
 

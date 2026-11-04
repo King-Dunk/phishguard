@@ -10,7 +10,7 @@ from phishguard.api import create_app
 from phishguard.config import Settings
 from phishguard.mutating import CaptureChannel
 from phishguard.security import APIKeyAuth, RateLimiter
-from tests.conftest import FakeClock
+from tests.conftest import PASSWORD, FakeClock
 
 KEY = "test-key-0123456789"
 H = {"x-api-key": KEY}
@@ -41,7 +41,22 @@ def test_fail_closed_without_keys(monkeypatch):
     assert s.api_keys == ("a", "b") and "'a'" not in repr(s)
 
 
-@pytest.mark.parametrize("path", ["/analyze", "/analyze/eml", "/actions", "/mfa/verify", "/mfa/enroll"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/analyze",
+        "/analyze/eml",
+        "/actions",
+        "/mfa/verify",
+        "/mfa/enroll",
+        "/mfa/factor",
+        "/mfa/challenge",
+        "/mfa/enroll/password",
+        "/mfa/enroll/questions",
+        "/mfa/webauthn/register/options",
+        "/mfa/webauthn/register/verify",
+    ],
+)
 def test_every_route_but_health_needs_key(path):
     c, *_ = _app()
     assert c.get("/health").status_code == 200 and c.get("/health").json()["auth"] == "enabled"
@@ -50,6 +65,8 @@ def test_every_route_but_health_needs_key(path):
     assert c.post(path, json={}, headers={"x-api-key": ""}).status_code == 401
     assert c.post(path, json={}, headers=H).status_code != 401
     assert c.get("/audit/verify").status_code == 401
+    for get in ("/payments/accounts", "/payments/payees/ACME-VENDOR", "/mfa/factors/alice", "/mfa/pending/x"):
+        assert c.get(get).status_code == 401
 
 
 def test_constant_time_auth_unit():
@@ -108,16 +125,23 @@ def test_enroll_and_totp_verify_over_api(tmp_path):
     assert r.status_code == 200
     t = pyotp.parse_uri(r.json()["otpauth_uri"])
     assert c.post("/mfa/enroll", json={"user": "alice"}, headers=H).status_code == 409
+    assert c.post("/mfa/enroll/password", json={"user": "alice", "password": PASSWORD}, headers=H).status_code == 200
     p = c.post("/actions", json={"action_type": "transfer_funds", "requested_by": "alice", "params": {}}, headers=H)
     p = p.json()
-    assert p["mfa_method"] == "totp" and ch.codes == {}
+    assert p["mfa_method"] == "multi" and p["factors_available"] == ["password", "totp"] and ch.codes == {}
     body = {"pending_id": p["pending_id"], "code": t.at(clock()), "confirm_digest": p["confirm_digest"]}
-    assert c.post("/mfa/verify", json=body, headers=H).status_code == 200
+    first = c.post("/mfa/verify", json=body, headers=H)
+    assert first.status_code == 202 and first.json()["factors_satisfied"] == ["totp"]
+    pw = {"pending_id": p["pending_id"], "confirm_digest": p["confirm_digest"], "method": "password"}
+    done = c.post("/mfa/factor", json={**pw, "response": {"password": PASSWORD}}, headers=H)
+    assert done.status_code == 422 and done.json()["status"] == "declined"  # MFA passed; no payee given
+    assert done.json()["result"]["error"] == "invalid_request"
     assert c.get("/audit/verify", headers=H).json() == {"chain_ok": True, "first_broken": None}
 
 
 def test_lockout_returns_423(tmp_path):
     c, app, ch, clock = _app(tmp_path, mfa_max_attempts=10, mfa_lockout_threshold=5)
+    assert c.post("/mfa/enroll", json={"user": "m"}, headers=H).status_code == 200
     p = c.post("/actions", json={"action_type": "pay_invoice", "requested_by": "m", "params": {}}, headers=H).json()
     body = {"pending_id": p["pending_id"], "code": "nope", "confirm_digest": p["confirm_digest"]}
     codes = [c.post("/mfa/verify", json=body, headers=H).status_code for _ in range(6)]
@@ -128,11 +152,22 @@ def test_lockout_returns_423(tmp_path):
 
 def test_pending_survives_app_restart(tmp_path):
     c1, app1, ch1, clock = _app(tmp_path)
-    p = c1.post("/actions", json={"action_type": "transfer_funds", "requested_by": "b", "params": {}}, headers=H).json()
-    code = ch1.codes[p["pending_id"]]
+    t = pyotp.parse_uri(c1.post("/mfa/enroll", json={"user": "b"}, headers=H).json()["otpauth_uri"])
+    c1.post("/mfa/enroll/password", json={"user": "b", "password": PASSWORD}, headers=H)
+    params = {"amount": 1200, "payee_id": "GLOBEX"}
+    p = c1.post(
+        "/actions", json={"action_type": "transfer_funds", "requested_by": "b", "params": params}, headers=H
+    ).json()
+    pw = {"pending_id": p["pending_id"], "confirm_digest": p["confirm_digest"], "method": "password"}
+    assert c1.post("/mfa/factor", json={**pw, "response": {"password": PASSWORD}}, headers=H).status_code == 202
     app1.state.store.close()
     c2, app2, *_ = _app(tmp_path)  # brand-new app over the same DB file
     assert c2.get("/health").json()["persistence"] == "sqlite"
-    body = {"pending_id": p["pending_id"], "code": code, "confirm_digest": p["confirm_digest"]}
-    assert c2.post("/mfa/verify", json=body, headers=H).status_code == 200
+    body = {"pending_id": p["pending_id"], "code": t.at(clock()), "confirm_digest": p["confirm_digest"]}
+    r = c2.post("/mfa/verify", json=body, headers=H)  # second factor after the restart
+    assert r.status_code == 200, r.text
+    tx = r.json()["result"]["transaction_id"]
+    assert c2.get(f"/payments/transactions/{tx}", headers=H).json()["amount"] == "1200.00"
+    hist = c2.get("/payments/accounts/OPERATING/transactions", headers=H).json()["transactions"]
+    assert [h["id"] for h in hist] == [tx]
     assert c2.get("/audit/verify", headers=H).json()["chain_ok"]

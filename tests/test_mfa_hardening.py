@@ -1,4 +1,7 @@
-"""TOTP enrollment, anti-replay, lockout, hash-chained audit and SQLite persistence."""
+"""TOTP enrollment, anti-replay, lockout, hash-chained audit and SQLite persistence.
+
+In the default two-factor flow the TOTP code is one factor; these tests pair it with the password.
+"""
 
 import sqlite3
 
@@ -8,14 +11,12 @@ import pytest
 from phishguard.mutating import (
     AlreadyEnrolled,
     AuditLog,
-    CaptureChannel,
-    Executor,
     MFAFailed,
-    MFAGateway,
+    MFAIncomplete,
     OperationLocked,
     SQLiteStore,
-    TOTPManager,
 )
+from tests.conftest import PASSWORD, make_gateway
 
 
 def _totp(uri: str) -> pyotp.TOTP:
@@ -23,19 +24,18 @@ def _totp(uri: str) -> pyotp.TOTP:
 
 
 def _gw(clock, store=None, **kw):
-    totp = TOTPManager(store=store, clock=clock)
-    gw = MFAGateway(
-        executor=Executor(),
-        audit=AuditLog(clock=clock, store=store),
-        channel=CaptureChannel(),
-        timeout_seconds=600,
-        max_attempts=3,
-        clock=clock,
-        totp=totp,
-        store=store,
-        **kw,
-    )
-    return gw, totp
+    gw = make_gateway(clock, store=store, **kw)
+    return gw, gw.totp
+
+
+def _pw(gw, r):
+    """First factor: the password. The TOTP code then completes the policy."""
+    assert gw.verify_factor(r.pending_id, "password", {"password": PASSWORD}, r.digest).status == "pending_mfa"
+
+
+def _user(gw, totp, name):
+    gw.factors.password.enroll(name, PASSWORD)
+    return _totp(totp.enroll(name))
 
 
 def test_enroll_returns_otpauth_uri_and_refuses_reenroll(clock):
@@ -48,19 +48,31 @@ def test_enroll_returns_otpauth_uri_and_refuses_reenroll(clock):
 
 def test_totp_flow_no_code_delivered(clock):
     gw, totp = _gw(clock)
-    t = _totp(totp.enroll("alice"))
+    t = _user(gw, totp, "alice")
     r = gw.submit("transfer_funds", {"amount": 10}, "alice")
-    assert r.method == "totp" and gw.channel.codes == {}
+    assert r.method == "multi" and "totp" in r.factors_available and gw.channel.codes == {}
+    _pw(gw, r)
     gw.verify(r.pending_id, t.at(clock()), r.digest)
     assert len(gw.executor.ledger) == 1
 
 
+def test_totp_alone_is_not_enough(clock):
+    gw, totp = _gw(clock)
+    t = _user(gw, totp, "alice")
+    r = gw.submit("transfer_funds", {"amount": 10}, "alice")
+    with pytest.raises(MFAIncomplete) as e:
+        gw.verify(r.pending_id, t.at(clock()), r.digest)
+    assert e.value.result.satisfied == ["totp"] and e.value.result.remaining == 1 and gw.executor.ledger == []
+
+
 def test_totp_code_cannot_be_replayed_in_same_window(clock):
     gw, totp = _gw(clock)
-    t = _totp(totp.enroll("alice"))
+    t = _user(gw, totp, "alice")
     code = t.at(clock())
     a = gw.submit("transfer_funds", {"n": 1}, "alice")
     b = gw.submit("transfer_funds", {"n": 2}, "alice")
+    _pw(gw, a)
+    _pw(gw, b)
     gw.verify(a.pending_id, code, a.digest)
     with pytest.raises(MFAFailed):
         gw.verify(b.pending_id, code, b.digest)  # same code, same 30 s window -> refused
@@ -80,15 +92,17 @@ def test_totp_drift_window(clock):
 
 def test_wrong_digest_does_not_burn_totp_step(clock):
     gw, totp = _gw(clock)
-    t = _totp(totp.enroll("alice"))
+    t = _user(gw, totp, "alice")
     r = gw.submit("pay_invoice", {}, "alice")
     with pytest.raises(MFAFailed):
         gw.verify(r.pending_id, t.at(clock()), "bad-digest")
+    _pw(gw, r)
     gw.verify(r.pending_id, t.at(clock()), r.digest)
 
 
 def test_five_consecutive_failures_lock_operation_and_audit(clock):
-    gw, _ = _gw(clock, lockout_threshold=5, lockout_seconds=900)
+    gw, totp = _gw(clock, lockout_threshold=5, lockout_seconds=900)
+    _user(gw, totp, "mallory")
     a = gw.submit("transfer_funds", {"n": 1}, "mallory")
     for _ in range(3):
         with pytest.raises(MFAFailed):
@@ -113,15 +127,44 @@ def test_five_consecutive_failures_lock_operation_and_audit(clock):
 
 
 def test_success_resets_failure_counter(clock):
-    gw, _ = _gw(clock, lockout_threshold=5)
+    gw, totp = _gw(clock, lockout_threshold=5)
+    t = _user(gw, totp, "alice")
     for _ in range(3):
         r = gw.submit("transfer_funds", {}, "alice")
         with pytest.raises(MFAFailed):
             gw.verify(r.pending_id, "bad", r.digest)
         with pytest.raises(MFAFailed):
             gw.verify(r.pending_id, "bad", r.digest)
-        gw.verify(r.pending_id, gw.channel.codes[r.pending_id], r.digest)
+        _pw(gw, r)
+        gw.verify(r.pending_id, t.at(clock()), r.digest)
+        clock.advance(30)  # next TOTP step
     assert len(gw.executor.ledger) == 3
+
+
+def test_one_correct_factor_does_not_reset_failure_counter(clock):
+    """Attacker who knows the password guesses TOTP and keeps 'proving' the password between guesses."""
+    gw, totp = _gw(clock, lockout_threshold=5)
+    _user(gw, totp, "alice")
+    locked = False
+    for _ in range(4):
+        r = gw.submit("transfer_funds", {}, "alice")
+        _pw(gw, r)
+        try:
+            for _ in range(2):
+                gw.verify(r.pending_id, "000000x", r.digest)
+        except MFAFailed:
+            pass
+        except OperationLocked:
+            locked = True
+            break
+        try:
+            gw.verify(r.pending_id, "000000x", r.digest)
+        except MFAFailed:
+            pass
+        except OperationLocked:
+            locked = True
+            break
+    assert locked and gw.executor.ledger == []
 
 
 def test_hash_chain_links_entries(clock):
@@ -172,18 +215,22 @@ def test_sqlite_tamper_detected(tmp_path, clock):
 def test_state_survives_restart(tmp_path, clock):
     db = str(tmp_path / "pg.db")
     gw1, totp1 = _gw(clock, SQLiteStore(db))
-    t = _totp(totp1.enroll("alice"))
-    r = gw1.submit("transfer_funds", {"amount": 7}, "bob")  # bob: channel code
-    code = gw1.channel.codes[r.pending_id]
-    r2 = gw1.submit("change_bank_details", {"iban": "X"}, "alice")  # alice: TOTP
+    t = _user(gw1, totp1, "alice")
+    tb = _user(gw1, totp1, "bob")
+    r = gw1.submit("transfer_funds", {"amount": 7, "payee_id": "ACME-VENDOR"}, "bob")
+    _pw(gw1, r)  # bob passes one factor before the restart
+    r2 = gw1.submit("approve_invoice", {"invoice_id": "INV-1001"}, "alice")
     used = t.at(clock())
+    _pw(gw1, r2)
     gw1.verify(r2.pending_id, used, r2.digest)
     del gw1, totp1  # "process restart"
 
     gw2, totp2 = _gw(clock, SQLiteStore(db))
     assert gw2.state_of(r.pending_id) == "pending" and gw2.state_of(r2.pending_id) == "executed"
-    gw2.verify(r.pending_id, code, r.digest)
-    assert gw2.executor.ledger[0]["params"] == {"amount": 7}
+    assert gw2.status(r.pending_id)["factors_satisfied"] == ["password"]  # progress survived
+    gw2.verify(r.pending_id, tb.at(clock()), r.digest)
+    assert gw2.executor.ledger[0]["params"] == {"amount": 7, "payee_id": "ACME-VENDOR"}
+    assert gw2.executor.payments.balance_cents("OPERATING") == 25_000_000 - 700  # bank state persisted too
     assert totp2.is_enrolled("alice") and not totp2.verify("alice", used)  # replay guard persisted
     assert gw2.audit.verify_chain()
     events = [e["event"] for e in gw2.audit.entries()]
@@ -192,7 +239,8 @@ def test_state_survives_restart(tmp_path, clock):
 
 def test_lockout_survives_restart(tmp_path, clock):
     db = str(tmp_path / "pg.db")
-    gw1, _ = _gw(clock, SQLiteStore(db), lockout_threshold=2)
+    gw1, totp1 = _gw(clock, SQLiteStore(db), lockout_threshold=2)
+    _user(gw1, totp1, "m")
     r = gw1.submit("transfer_funds", {}, "m")
     with pytest.raises(MFAFailed):
         gw1.verify(r.pending_id, "x", r.digest)

@@ -43,6 +43,9 @@ PROTECTED = (
     "phishguard/api.py",  # exposes /actions and /mfa/*
     "phishguard/security.py",  # API auth and rate limiting
     "phishguard/config.py",  # MFA timeouts, lockout thresholds, keys
+    "phishguard/mfa_config.py",  # factor policy, WebAuthn RP, payment limits and cooling-off
+    "phishguard/routes/",  # /mfa/factor, enrollment and payment routes
+    "redteam/virtual_authenticator.py",  # what the passkey attacks sign with
     "phishguard/connectors/",  # mailbox credentials, read-only boundary, webhook authentication
     "phishguard/mailbox_guard.py",  # turns verdicts into mailbox actions via the gateway
     "redteam/improve.py",  # this guard itself

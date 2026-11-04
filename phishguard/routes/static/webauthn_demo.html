@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhishGuard - passkey approval demo</title>
+<style>
+  :root { color-scheme: light dark; --b: #8884; }
+  body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; margin-bottom: .2rem; }
+  .note { opacity: .75; font-size: .9rem; }
+  fieldset { border: 1px solid var(--b); border-radius: 8px; margin: 1rem 0; padding: .8rem 1rem; }
+  legend { font-weight: 600; padding: 0 .3rem; }
+  label { display: inline-block; min-width: 9rem; }
+  input { font: inherit; padding: .25rem .4rem; margin: .15rem 0; width: 18rem; max-width: 100%; }
+  button { font: inherit; padding: .35rem .8rem; margin: .3rem .3rem .3rem 0; cursor: pointer; }
+  pre { background: #8881; border: 1px solid var(--b); border-radius: 6px; padding: .6rem; white-space: pre-wrap; word-break: break-word; max-height: 22rem; overflow: auto; font-size: .82rem; }
+  .ok { color: #2a7; } .bad { color: #c33; } .warn { color: #b80; }
+</style>
+</head>
+<body>
+<h1>PhishGuard: approve a held transfer with two factors</h1>
+<p class="note">Local demo only (served when the WebAuthn RP ID is <code>localhost</code>). Open it as
+<code>http://localhost:8000/demo/webauthn</code>, not 127.0.0.1: browsers refuse an IP address as a WebAuthn RP ID.
+The passkey is verified by the server (signature, origin, RP ID, challenge bound to the action, sign counter,
+user verification = required). Touch ID / Face ID never leaves your device.</p>
+
+<fieldset>
+  <legend>0. Connection</legend>
+  <label for="key">API key</label><input id="key" placeholder="PHISHGUARD_API_KEYS value"><br>
+  <label for="admin">Admin key</label><input id="admin" placeholder="PHISHGUARD_ADMIN_KEYS value (enrollment only)"><br>
+  <label for="user">User</label><input id="user" value="alice">
+  <p class="note">Keys stay in this page's memory and are sent only to this server in the X-API-Key header.</p>
+</fieldset>
+
+<fieldset>
+  <legend>1. Enroll (once, with the admin key)</legend>
+  <label for="pw">Password</label><input id="pw" type="password" autocomplete="new-password" placeholder="at least 8 characters">
+  <button id="enrollPw">Set password</button><br>
+  <button id="regPasskey">Register a passkey (Touch ID)</button>
+  <button id="factors">Show my factors</button>
+</fieldset>
+
+<fieldset>
+  <legend>2. Ask the agent to move money</legend>
+  <label for="amount">Amount (AUD)</label><input id="amount" value="5000"><br>
+  <label for="payee">Payee</label><input id="payee" value="ACME-VENDOR"><br>
+  <button id="submit">Submit transfer_funds</button>
+  <p class="note">The gateway holds it as <code>pending_mfa</code>. Or paste a pending id + digest from curl / the CLI demo:</p>
+  <label for="pid">pending_id</label><input id="pid"><br>
+  <label for="digest">confirm_digest</label><input id="digest">
+</fieldset>
+
+<fieldset>
+  <legend>3. Approve: two different factors, at least one not a password/answer</legend>
+  <label for="pw2">Password</label><input id="pw2" type="password" autocomplete="current-password">
+  <button id="approvePw">Approve with password</button><br>
+  <button id="approvePasskey">Approve with passkey (Touch ID)</button>
+  <button id="status">Pending status</button>
+  <button id="accounts">Balances &amp; history</button>
+</fieldset>
+
+<pre id="log">Ready.</pre>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const log = (msg, cls) => {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = typeof msg === "string" ? msg : JSON.stringify(msg, null, 2);
+  $("log").prepend(line);
+};
+const b64uToBuf = (s) => {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const bin = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0)).buffer;
+};
+const bufToB64u = (buf) => {
+  let bin = "";
+  new Uint8Array(buf).forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
+async function api(path, body, admin = false, method = "POST") {
+  const headers = { "content-type": "application/json", "x-api-key": admin ? $("admin").value : $("key").value };
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let data;
+  try { data = await res.json(); } catch { data = await res.text(); }
+  log({ request: `${method} ${path}`, status: res.status, response: data }, res.ok ? "ok" : (res.status === 202 ? "warn" : "bad"));
+  return { status: res.status, data };
+}
+const pending = () => ({ pending_id: $("pid").value.trim(), confirm_digest: $("digest").value.trim() });
+
+$("enrollPw").onclick = () => api("/mfa/enroll/password", { user: $("user").value, password: $("pw").value }, true);
+$("factors").onclick = () => api(`/mfa/factors/${encodeURIComponent($("user").value)}`, null, false, "GET");
+
+$("regPasskey").onclick = async () => {
+  if (!window.PublicKeyCredential) return log("This browser has no WebAuthn support.", "bad");
+  const { status, data } = await api("/mfa/webauthn/register/options", { user: $("user").value }, true);
+  if (status !== 200) return;
+  const o = data.publicKey;
+  o.challenge = b64uToBuf(o.challenge);
+  o.user.id = b64uToBuf(o.user.id);
+  (o.excludeCredentials || []).forEach((c) => (c.id = b64uToBuf(c.id)));
+  let cred;
+  try { cred = await navigator.credentials.create({ publicKey: o }); }
+  catch (e) { return log(`navigator.credentials.create failed: ${e.name}: ${e.message}`, "bad"); }
+  const credential = {
+    id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+    response: {
+      clientDataJSON: bufToB64u(cred.response.clientDataJSON),
+      attestationObject: bufToB64u(cred.response.attestationObject),
+      transports: cred.response.getTransports ? cred.response.getTransports() : [],
+    },
+    clientExtensionResults: cred.getClientExtensionResults(),
+    authenticatorAttachment: cred.authenticatorAttachment || null,
+  };
+  api("/mfa/webauthn/register/verify", { user: $("user").value, credential });
+};
+
+$("submit").onclick = async () => {
+  const { status, data } = await api("/actions", {
+    action_type: "transfer_funds", requested_by: $("user").value,
+    params: { amount: $("amount").value, payee_id: $("payee").value },
+  });
+  if (status === 202) { $("pid").value = data.pending_id; $("digest").value = data.confirm_digest; }
+};
+
+$("approvePw").onclick = () =>
+  api("/mfa/factor", { ...pending(), method: "password", response: { password: $("pw2").value } });
+
+$("approvePasskey").onclick = async () => {
+  const { status, data } = await api("/mfa/challenge", { ...pending(), method: "webauthn" });
+  if (status !== 200) return;
+  const o = data.publicKey;
+  o.challenge = b64uToBuf(o.challenge);
+  (o.allowCredentials || []).forEach((c) => (c.id = b64uToBuf(c.id)));
+  let a;
+  try { a = await navigator.credentials.get({ publicKey: o }); }
+  catch (e) { return log(`navigator.credentials.get failed: ${e.name}: ${e.message}`, "bad"); }
+  const credential = {
+    id: a.id, rawId: bufToB64u(a.rawId), type: a.type,
+    response: {
+      clientDataJSON: bufToB64u(a.response.clientDataJSON),
+      authenticatorData: bufToB64u(a.response.authenticatorData),
+      signature: bufToB64u(a.response.signature),
+      userHandle: a.response.userHandle ? bufToB64u(a.response.userHandle) : null,
+    },
+    clientExtensionResults: a.getClientExtensionResults(),
+    authenticatorAttachment: a.authenticatorAttachment || null,
+  };
+  api("/mfa/factor", { ...pending(), method: "webauthn", response: { credential } });
+};
+
+$("status").onclick = () => api(`/mfa/pending/${encodeURIComponent($("pid").value.trim())}`, null, false, "GET");
+$("accounts").onclick = async () => {
+  await api("/payments/accounts", null, false, "GET");
+  api("/payments/accounts/OPERATING/transactions?limit=5", null, false, "GET");
+};
+</script>
+</body>
+</html>

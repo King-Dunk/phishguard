@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from .mfa_config import MFAConfig, PaymentsConfig
+
 DEFAULT_MODEL = "claude-haiku-5-5"
 
 # Risk score (0-100) at which a mail is flagged as phishing. 35, not 50: on the real-corpus test
@@ -47,6 +49,8 @@ class Settings:
     admin_keys: tuple[str, ...] = field(default=(), repr=False)  # may call /mfa/enroll
     open_enrollment: bool = True  # dataclass default is for tests; from_env() requires an admin key
     max_body_bytes: int = 3_000_000
+    mfa: MFAConfig = field(default_factory=MFAConfig)  # factors, policy, WebAuthn RP
+    payments: PaymentsConfig = field(default_factory=PaymentsConfig)  # provider, limits, cooling-off
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -73,4 +77,6 @@ class Settings:
             admin_keys=tuple(k.strip() for k in os.environ.get("PHISHGUARD_ADMIN_KEYS", "").split(",") if k.strip()),
             open_enrollment=os.environ.get("PHISHGUARD_OPEN_ENROLLMENT") == "1",
             max_body_bytes=int(os.environ.get("PHISHGUARD_MAX_BODY_BYTES", "3000000")),
+            mfa=MFAConfig.from_env(),
+            payments=PaymentsConfig.from_env(),
         )

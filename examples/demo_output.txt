@@ -1,31 +1,46 @@
 
 == 0. no API key is refused
-<- HTTP 401 {"detail":"missing or invalid API key"}
+<- HTTP 401 {'detail': 'missing or invalid API key'}
+
 == 1. analyze phishing email
-<- HTTP 200 risk=96.6% is_phishing=True
-   top contributions: lookalike_domain +22.8; auth_fail +19.8; low_reputation +12.3; reply_to_mismatch +10.2
+<- risk=96.7% is_phishing=True
+   top contributions: lookalike_domain +22.6; auth_fail +19.7; reply_to_mismatch +12.2; low_reputation +12.2
 
-== 1b. analyze raw .eml (phish_punycode_homoglyph.eml)
-<- HTTP 200 risk=68.0%
-   homoglyph_domain: +54.7 (xn--cme-corp-06g.com renders as acme-corp.com, spoofing acme-corp.com)
-   payment_keywords: +13.3 (matched 'bank account')
+== 2. alice enrolled four factors (admin key)
+<- HTTP 200 {'user': 'alice', 'enrolled': ['password', 'security_questions', 'totp', 'webauthn'], 'policy': {'mode': 'multi_factor', 'required': 2, 'non_knowledge_required': True}, 'can_approve': True}
 
-== 2. transfer_funds is suspended by the MFA gateway
-<- HTTP 202 {"status":"pending_mfa","pending_id":"2RZ_lqMEscigGQRj","confirm_digest":"dc915601d5657cc0","summary":"transfer_funds (digest dc915601d5657cc0) requested by alice","expires_at":1793678831.2632627,"mfa_method":"channel","next":"POST /mfa/verify with the out-of-band code and confirm_digest"}
+== 3. transfer_funds 50,000 AUD is suspended by the MFA gateway
+<- HTTP 202 {'status': 'pending_mfa', 'confirm_digest': 'ec8da7e44b5dd2bb', 'factors_available': ['password', 'security_questions', 'totp', 'webauthn'], 'mfa_policy': {'mode': 'multi_factor', 'required': 2, 'non_knowledge_required': True}}
 
-== 3. wrong code is rejected
-<- HTTP 403 {"detail":{"error":"verification failed (bad_code)","attempts_left":2}}
+== 4. wrong password is rejected
+<- HTTP 403 {'detail': {'error': 'verification failed (bad_password)', 'attempts_left': 2}}
 
-== 4. correct out-of-band code + digest echo is released
-<- HTTP 200 {"status":"executed","result":{"ok":true,"effect_index":0}}
+== 5. right password: still HELD (1 of 2 factors)
+<- HTTP 202 {'status': 'pending_mfa', 'pending_id': 'ZTkEEEOafHcoYNdg', 'accepted': 'password', 'factors_satisfied': ['password'], 'factors_remaining': 1, 'needs_non_knowledge': True, 'factors_available': ['security_questions', 'totp', 'webauthn'], 'next': 'one more factor required, and it must be totp or webauthn (two knowledge factors are not enough)'}
 
-== 5. second transfer, then wait 4.0s without verifying
+== 6. + security questions: still HELD (two knowledge factors are not enough)
+<- HTTP 202 {'status': 'pending_mfa', 'pending_id': 'ZTkEEEOafHcoYNdg', 'accepted': 'security_questions', 'factors_satisfied': ['password', 'security_questions'], 'factors_remaining': 1, 'needs_non_knowledge': True, 'factors_available': ['totp', 'webauthn'], 'next': 'one more factor required, and it must be totp or webauthn (two knowledge factors are not enough)'}
 
-==    late (correct) code after timeout is rejected
-<- HTTP 410 {"detail":"MFA timed out; action rejected"}
+== 7. + TOTP code from the authenticator app: RELEASED
+<- HTTP 200 {'status': 'executed'}
+   tx_9b4d92e7aeab751e: 50000.00 AUD -> ACME-VENDOR, idempotency key pg-ZTkEEEOafHcoYNdg
 
-== 6. TOTP enrollment returns an otpauth:// URI (secret redacted here)
-<- HTTP 200 {"user":"carol","otpauth_uri":"otpauth://totp/PhishGuard:carol?secret=<redacted>&issuer=PhishGuard"}
+== 8. second transfer: password + passkey (challenge bound to this action): RELEASED
+<- HTTP 200 {'status': 'executed', 'factors': ['password', 'webauthn']}
 
-== 7. audit hash chain verifies
-<- HTTP 200 {"chain_ok":true,"first_broken":null}
+==    replaying that passkey assertion is refused
+<- HTTP 409 {'detail': '2IMMh-lTLm6Cf-nX is already executed'}
+
+== 9. 'our bank details changed' + urgent invoice: MFA passes, bank holds it (cooling-off)
+<- HTTP 422 {'status': 'declined', 'result': {'ok': False, 'error': 'cooling_off', 'message': 'payee ACME-VENDOR details changed recently; payments held until cooling-off ends', 'retryable': False, 'payee_id': 'ACME-VENDOR', 'until': 1793839439.662009, 'effect_index': 3}, 'factors': ['password', 'webauthn']}
+
+== 10. another transfer, then wait 6.0s without approving
+
+==     late password after timeout is rejected
+<- HTTP 410 {'detail': 'MFA timed out; action rejected'}
+
+== 11. balances
+<- HTTP 200 {'provider': 'simulated', 'accounts': [{'id': 'OPERATING', 'name': 'Operating account', 'currency': 'AUD', 'balance': '198800.00', 'daily_limit': '100000.00', 'daily_used': '51200.00'}, {'id': 'PAYROLL', 'name': 'Payroll account', 'currency': 'AUD', 'balance': '80000.00', 'daily_limit': '100000.00', 'daily_used': '0.00'}]}
+
+== 12. audit hash chain verifies
+<- HTTP 200 {'chain_ok': True, 'first_broken': None}

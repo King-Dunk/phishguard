@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from phishguard.api import create_app
 from phishguard.mutating import CaptureChannel
-from tests.conftest import FakeClock
+from tests.conftest import PASSWORD, FakeClock, enroll
 
 
 @pytest.fixture
@@ -37,15 +37,19 @@ def test_actions_flow_end_to_end(ctx):
         "/actions", json={"action_type": "quarantine_email", "requested_by": "bob", "params": {"email_id": "e1"}}
     )
     assert r.status_code == 200 and r.json()["status"] == "executed"
-    r = c.post("/actions", json={"action_type": "pay_invoice", "requested_by": "bob", "params": {"invoice": "I-1"}})
+    creds = enroll(gw, "bob", ("password", "totp"))
+    r = c.post(
+        "/actions", json={"action_type": "pay_invoice", "requested_by": "bob", "params": {"invoice": "INV-1001"}}
+    )
     assert r.status_code == 202
     p = r.json()
-    assert ch.codes[p["pending_id"]] not in r.text  # code never in response
-    ok = c.post(
-        "/mfa/verify",
-        json={"pending_id": p["pending_id"], "code": ch.codes[p["pending_id"]], "confirm_digest": p["confirm_digest"]},
-    )
+    assert ch.codes == {} and p["factors_available"] == ["password", "totp"] and p["approvable"]
+    base = {"pending_id": p["pending_id"], "confirm_digest": p["confirm_digest"]}
+    one = c.post("/mfa/factor", json={**base, "method": "password", "response": {"password": PASSWORD}})
+    assert one.status_code == 202 and one.json()["factors_remaining"] == 1 and len(gw.executor.ledger) == 1
+    ok = c.post("/mfa/verify", json={**base, "code": creds.totp.at(ctx[3]())})
     assert ok.status_code == 200 and len(gw.executor.ledger) == 2
+    assert ok.json()["result"]["transaction"]["invoice_id"] == "INV-1001"
     again = c.post("/mfa/verify", json={"pending_id": p["pending_id"], "code": "x", "confirm_digest": "y"})
     assert again.status_code == 409
 
@@ -53,16 +57,18 @@ def test_actions_flow_end_to_end(ctx):
 def test_verify_error_codes(ctx):
     c, gw, ch, clock = ctx
     assert c.post("/mfa/verify", json={"pending_id": "nope", "code": "1", "confirm_digest": "x"}).status_code == 404
+    creds = enroll(gw, "b", ("password", "totp"))
     p = c.post("/actions", json={"action_type": "transfer_funds", "requested_by": "b", "params": {}}).json()
-    bad = c.post(
-        "/mfa/verify", json={"pending_id": p["pending_id"], "code": "abcdef", "confirm_digest": p["confirm_digest"]}
-    )
+    base = {"pending_id": p["pending_id"], "confirm_digest": p["confirm_digest"]}
+    bad = c.post("/mfa/verify", json={**base, "code": "abcdef"})
     assert bad.status_code == 403 and bad.json()["detail"]["attempts_left"] == 2
+    unknown = c.post("/mfa/factor", json={**base, "method": "sms", "response": {}})
+    assert unknown.status_code == 400  # not a method: refused, not counted
+    pw = {**base, "method": "password", "response": {"password": PASSWORD}}
+    assert c.post("/mfa/factor", json=pw).status_code == 202
+    assert c.post("/mfa/factor", json=pw).status_code == 409  # the same method twice never counts as two
     clock.advance(10_000)
-    late = c.post(
-        "/mfa/verify",
-        json={"pending_id": p["pending_id"], "code": ch.codes[p["pending_id"]], "confirm_digest": p["confirm_digest"]},
-    )
+    late = c.post("/mfa/verify", json={**base, "code": creds.totp.at(clock())})
     assert late.status_code == 410 and gw.executor.ledger == []
 
 

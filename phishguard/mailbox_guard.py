@@ -27,7 +27,8 @@ from .connectors.config import PROVIDERS
 from .connectors.scanner import Verdict
 from .connectors.secrets import SecretError, get_logger, install_redaction, redact
 from .connectors.worker import build_scanner, run
-from .mutating import AuditLog, Executor, MFAGateway, SQLiteStore
+from .mutating import MFAGateway, SQLiteStore
+from .mutating import build_gateway as build_mfa_gateway
 from .mutating.mailbox import remediation_handlers, remediator_from_env
 
 log = get_logger(__name__)
@@ -77,13 +78,9 @@ class GatewaySink:
 def build_gateway(provider: str, env: Mapping[str, str], settings: Settings, client=None, **kw) -> MFAGateway:
     rem = remediator_from_env(provider, env, client=client, **kw)
     store = SQLiteStore(settings.db_path) if settings.db_path else None
-    return MFAGateway(
-        executor=Executor(handlers=remediation_handlers(rem)),
-        audit=AuditLog(settings.audit_log_path, store=store),
-        timeout_seconds=settings.mfa_timeout_seconds,
-        max_attempts=settings.mfa_max_attempts,
-        store=store,
-    )
+    # Same wiring as the API: held actions (delete, release, bulk) need the two-factor policy, and
+    # with a shared PHISHGUARD_DB_PATH they can be approved through POST /mfa/factor.
+    return build_mfa_gateway(settings, store=store, handlers=remediation_handlers(rem))
 
 
 def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) -> int:

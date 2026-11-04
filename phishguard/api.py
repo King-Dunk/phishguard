@@ -23,21 +23,16 @@ from .llm import LLMClient, MockLLM
 from .models import EmailMessage
 from .mutating import (
     AlreadyEnrolled,
-    AuditLog,
     MFAChannel,
-    MFAFailed,
-    MFAGateway,
     OperationLocked,
-    PendingExpired,
-    PendingFinalized,
-    PendingNotFound,
     SQLiteStore,
-    TOTPManager,
     UnknownActionError,
+    build_gateway,
 )
 from .mutating.policy import MAX_PARAM_DEPTH
 from .readonly import EmlTooComplex, EmlTooLarge, parse_eml
 from .readonly.eml import MAX_RAW_BYTES
+from .routes import build_mfa_router, build_payments_router, pending_response, verify_code
 from .security import APIKeyAuth, BodySizeLimit, RateLimiter, json_depth
 
 
@@ -122,17 +117,7 @@ def create_app(
     llm = llm or _build_llm(settings)
     kw = {"clock": clock} if clock else {}
     store = SQLiteStore(settings.db_path) if settings.db_path else None
-    gateway = MFAGateway(
-        audit=AuditLog(settings.audit_log_path, store=store, **kw),
-        channel=channel,
-        timeout_seconds=settings.mfa_timeout_seconds,
-        max_attempts=settings.mfa_max_attempts,
-        totp=TOTPManager(store=store, **kw),
-        store=store,
-        lockout_threshold=settings.mfa_lockout_threshold,
-        lockout_seconds=settings.mfa_lockout_seconds,
-        **kw,
-    )
+    gateway = build_gateway(settings, store=store, channel=channel, clock=clock)  # factors, policy, providers
     agent = PhishingAgent(llm, settings)
     auth = APIKeyAuth(settings.api_keys + settings.admin_keys)
     admin = APIKeyAuth(settings.admin_keys)
@@ -217,25 +202,17 @@ def create_app(
             raise HTTPException(423, {"error": str(e), "locked_until": e.until}) from None
         if res.status == "executed":
             return {"status": "executed", "result": res.result}
-        nxt = "authenticator app code" if res.method == "totp" else "out-of-band code"
-        return SafeJSONResponse(
-            status_code=202,
-            content={
-                "status": "pending_mfa",
-                "pending_id": res.pending_id,
-                "confirm_digest": res.digest,
-                "summary": res.summary,
-                "expires_at": res.expires_at,
-                "mfa_method": res.method,
-                "next": f"POST /mfa/verify with the {nxt} and confirm_digest",
-            },
-        )
+        return pending_response(res)
 
     @app.post("/mfa/enroll", dependencies=protected)
     def mfa_enroll(req: EnrollRequest, request: Request):
         # Enrollment binds a second factor to an identity, so ordinary client keys may not do it:
         # otherwise any caller could enroll a victim first and then approve as them.
-        if not settings.open_enrollment and admin.check(request.headers.get("x-api-key")) is None:
+        # An X-Enrollment-Token from an approved add_mfa_factor action also works (see routes/mfa.py).
+        token_ok = gateway.factors.grants and gateway.factors.grants.consume(
+            request.headers.get("x-enrollment-token"), req.user, "totp"
+        )
+        if not settings.open_enrollment and admin.check(request.headers.get("x-api-key")) is None and not token_ok:
             raise HTTPException(403, "enrollment requires an admin key")
         try:
             uri = gateway.totp.enroll(req.user)
@@ -245,20 +222,11 @@ def create_app(
         return {"user": req.user, "otpauth_uri": uri}
 
     @app.post("/mfa/verify", dependencies=protected)
-    def mfa_verify(req: VerifyRequest):
-        try:
-            result = gateway.verify(req.pending_id, req.code, req.confirm_digest)
-        except PendingNotFound:
-            raise HTTPException(404, "unknown pending action") from None
-        except PendingExpired:
-            raise HTTPException(410, "MFA timed out; action rejected") from None
-        except PendingFinalized as e:
-            raise HTTPException(409, str(e)) from None
-        except OperationLocked as e:
-            raise HTTPException(423, {"error": str(e), "locked_until": e.until}) from None
-        except MFAFailed as e:
-            raise HTTPException(403, {"error": str(e), "attempts_left": e.attempts_left}) from None
-        return {"status": "executed", "result": result}
+    def mfa_verify(req: VerifyRequest):  # the code is the TOTP factor (or the dev flow's single code)
+        return verify_code(gateway, req.pending_id, req.code, req.confirm_digest)
+
+    app.include_router(build_mfa_router(gateway, settings, admin, protected))  # /mfa/factor, enrollment, demo
+    app.include_router(build_payments_router(gateway.executor.payments, protected))  # read-only /payments/*
 
     @app.get("/audit/verify", dependencies=protected)
     def audit_verify():

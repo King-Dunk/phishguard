@@ -1,4 +1,7 @@
-"""SQLite persistence (stdlib sqlite3, no ORM) for pending MFA actions, audit log, TOTP and lockouts.
+"""SQLite persistence (stdlib sqlite3, no ORM) for pending MFA actions, audit log, TOTP, lockouts,
+the other MFA factors (key/value rows) and the simulated bank.
+
+Every SQL statement is a string literal in this file; the red team checks at run time that nothing else runs.
 
 One connection guarded by a lock: FastAPI runs sync endpoints in a thread pool, and the
 gateway already serializes its own state changes, so contention is low.
@@ -16,6 +19,9 @@ CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, entry T
 CREATE TABLE IF NOT EXISTS pending (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS totp (user TEXT PRIMARY KEY, secret TEXT NOT NULL, last_step INTEGER NOT NULL DEFAULT -1);
 CREATE TABLE IF NOT EXISTS lockout (key TEXT PRIMARY KEY, fails INTEGER NOT NULL, locked_until REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS kv (ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (ns, key));
+CREATE TABLE IF NOT EXISTS bank_tx (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+    account TEXT NOT NULL, data TEXT NOT NULL);
 """
 
 
@@ -64,6 +70,50 @@ class SQLiteStore:
         self._q(
             "INSERT OR REPLACE INTO lockout (key, fails, locked_until) VALUES (?, ?, ?)", (key, fails, locked_until)
         )
+
+    # key/value rows: password hashes, security-question hashes, WebAuthn credentials, challenges,
+    # rate-limit windows, simulated bank accounts/payees/idempotency records (namespaced by `ns`)
+    def kv_get(self, ns: str, key: str) -> str | None:
+        rows = self._q("SELECT value FROM kv WHERE ns = ? AND key = ?", (ns, key))
+        return rows[0][0] if rows else None
+
+    def kv_put(self, ns: str, key: str, value: str) -> None:
+        self._q("INSERT OR REPLACE INTO kv (ns, key, value) VALUES (?, ?, ?)", (ns, key, value))
+
+    def kv_delete(self, ns: str, key: str) -> None:
+        self._q("DELETE FROM kv WHERE ns = ? AND key = ?", (ns, key))
+
+    def kv_items(self, ns: str) -> list[tuple[str, str]]:
+        return [(r[0], r[1]) for r in self._q("SELECT key, value FROM kv WHERE ns = ? ORDER BY key", (ns,))]
+
+    # simulated bank: several rows change together (balance, idempotency record, history), so one transaction
+    def bank_commit(self, puts: list[tuple[str, str, str]], txs: list[tuple[str, str, str]]) -> None:
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                for ns, key, value in puts:
+                    self._db.execute("INSERT OR REPLACE INTO kv (ns, key, value) VALUES (?, ?, ?)", (ns, key, value))
+                for tx_id, account, data in txs:
+                    self._db.execute(
+                        "INSERT OR REPLACE INTO bank_tx (id, account, data) VALUES (?, ?, ?)", (tx_id, account, data)
+                    )
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def bank_tx_get(self, tx_id: str) -> str | None:
+        rows = self._q("SELECT data FROM bank_tx WHERE id = ?", (tx_id,))
+        return rows[0][0] if rows else None
+
+    def bank_tx_list(self, account: str, limit: int) -> list[str]:
+        return [
+            r[0]
+            for r in self._q("SELECT data FROM bank_tx WHERE account = ? ORDER BY seq DESC LIMIT ?", (account, limit))
+        ]
+
+    def bank_tx_all(self) -> list[str]:
+        return [r[0] for r in self._q("SELECT data FROM bank_tx ORDER BY seq")]
 
     def close(self) -> None:
         with self._lock:
