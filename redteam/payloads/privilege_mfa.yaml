@@ -1,0 +1,74 @@
+category: privilege
+description: >
+  Attacks on the multi-factor policy, the individual factors (password, security questions, TOTP,
+  WebAuthn/passkey), self-service enrollment and the payment controls behind the gateway.
+  Passkey attacks use redteam/virtual_authenticator.py (a software authenticator), not a real device.
+attacks:
+  - id: pv-mfa-webauthn-cross-action
+    title: Passkey assertion signed for a small transfer, submitted for a large one
+    kind: flow
+    flow: webauthn_cross_action
+  - id: pv-mfa-webauthn-replay
+    title: Replay a used passkey assertion (new action, and the finished one)
+    kind: flow
+    flow: webauthn_replay
+  - id: pv-mfa-webauthn-cross-user
+    title: Approve Alice's transfer with Bob's passkey
+    kind: flow
+    flow: webauthn_cross_user
+  - id: pv-mfa-webauthn-bad-assertion
+    title: Assertion from a phishing origin, wrong RP ID, without user verification, cloned key (counter)
+    kind: flow
+    flow: webauthn_bad_assertion
+  - id: pv-mfa-downgrade-knowledge
+    title: Factor downgrade - password + security questions (two knowledge factors)
+    kind: flow
+    flow: factor_downgrade_knowledge
+  - id: pv-mfa-same-factor-twice
+    title: Two valid TOTP codes counted as two factors
+    kind: flow
+    flow: factor_same_twice
+  - id: pv-mfa-method-tricks
+    title: Legacy console channel, method-name variants (case, space, zero-width, NUL), wrong value types
+    kind: flow
+    flow: factor_method_tricks
+  - id: pv-mfa-questions-bruteforce
+    title: Brute-force security answers across pending actions
+    kind: flow
+    flow: sq_bruteforce
+  - id: pv-mfa-password-bruteforce
+    title: Brute-force the password, then use it on another operation
+    kind: flow
+    flow: password_bruteforce
+  - id: pv-mfa-lockout-reset
+    title: Known password used to reset the lockout counter between TOTP guesses
+    kind: flow
+    flow: lockout_reset_by_password
+  - id: pv-mfa-concurrent-release
+    title: All factors (and duplicates) submitted concurrently - double execution?
+    kind: flow
+    flow: concurrent_release
+  - id: pv-mfa-enroll-no-admin
+    title: Client key enrolls password / questions / passkey for a victim, or forges an enrollment token
+    kind: flow
+    flow: enroll_factor_no_admin
+  - id: pv-mfa-enroll-token-misuse
+    title: Self-service enrollment token reused, or used for another user or method
+    kind: flow
+    flow: enroll_token_misuse
+  - id: pv-pay-bec-cooling-off
+    title: BEC - approved bank-detail change, then an urgent payment to the new account
+    kind: flow
+    flow: bec_cooling_off
+  - id: pv-pay-limit-split
+    title: Split a large payment to slip under the per-transfer limit
+    kind: flow
+    flow: limit_split
+  - id: pv-mfa-nonascii-inputs
+    title: Non-ASCII / lone-surrogate confirm_digest, code and passkey credential id
+    kind: flow
+    flow: nonascii_mfa_inputs
+  - id: pv-mfa-secrets-not-in-audit
+    title: Password, answers, TOTP secret or assertion leak into the audit log
+    kind: flow
+    flow: secrets_not_in_audit

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import ast
 import io
+import json
 import os
 import pathlib
 import sqlite3
@@ -32,6 +33,7 @@ import pyotp
 import yaml
 
 from .builders import build_eml, expand
+from .virtual_authenticator import VirtualAuthenticator
 
 HERE = pathlib.Path(__file__).parent
 PAYLOADS = HERE / "payloads"
@@ -59,7 +61,9 @@ def store_sql_literals() -> set[str]:
         " ".join(n.value.split())
         for n in ast.walk(tree)
         if isinstance(n, ast.Constant) and isinstance(n.value, str)
-        if n.value.strip().upper().startswith(("SELECT", "INSERT", "UPDATE", "DELETE", "PRAGMA", "CREATE"))
+        if n.value.strip()
+        .upper()
+        .startswith(("SELECT", "INSERT", "UPDATE", "DELETE", "PRAGMA", "CREATE", "BEGIN", "COMMIT", "ROLLBACK"))
     }
     return lits
 
@@ -267,19 +271,83 @@ def sc_request(c: Ctx) -> None:
         c.check("not_executed", r.json().get("status") != "executed", r.text[:120])
 
 
+RT_PASSWORD = "rt-correct-horse-battery"
+RT_QUESTIONS = [
+    {"question": "Name of your first pet?", "answer": "Rex"},
+    {"question": "City where you were born?", "answer": "Brisbane"},
+    {"question": "Your first school?", "answer": "Hillcrest Primary"},
+]
+
+
 def _enroll(c: Ctx, user: str) -> pyotp.TOTP:
+    """TOTP + password: the two factors most flows approve with."""
     r = c.req("POST", "/mfa/enroll", json={"user": user}, key="admin")
     assert r.status_code == 200, r.text
+    pw = c.req("POST", "/mfa/enroll/password", json={"user": user, "password": RT_PASSWORD}, key="admin")
+    assert pw.status_code == 200, pw.text
     return pyotp.parse_uri(r.json()["otpauth_uri"])
 
 
+def _enroll_all(c: Ctx, user: str) -> tuple[pyotp.TOTP, VirtualAuthenticator]:
+    t = _enroll(c, user)
+    r = c.req("POST", "/mfa/enroll/questions", json={"user": user, "questions": RT_QUESTIONS}, key="admin")
+    assert r.status_code == 200, r.text
+    va = VirtualAuthenticator()
+    o = c.req("POST", "/mfa/webauthn/register/options", json={"user": user}, key="admin").json()
+    r = c.req("POST", "/mfa/webauthn/register/verify", json={"user": user, "credential": va.create(o["publicKey"])})
+    assert r.status_code == 200, r.text
+    return t, va
+
+
+def _mark(c: Ctx, p: dict, r: Resp) -> Resp:
+    """The runner itself approved this action (a legitimate approval, not a bypass)."""
+    if r.status_code in (200, 422) and r.json().get("status") in ("executed", "declined"):
+        c.approved.add(p["confirm_digest"])
+    return r
+
+
+def _factor(c: Ctx, p: dict, method: str, response: dict) -> Resp:
+    body = {
+        "pending_id": p["pending_id"],
+        "confirm_digest": p["confirm_digest"],
+        "method": method,
+        "response": response,
+    }
+    return _mark(c, p, c.req("POST", "/mfa/factor", json=body))
+
+
+def _challenge(c: Ctx, p: dict, method: str) -> dict:
+    body = {"pending_id": p["pending_id"], "confirm_digest": p["confirm_digest"], "method": method}
+    return c.req("POST", "/mfa/challenge", json=body).json()
+
+
+def _password(c: Ctx, p: dict, password: str = RT_PASSWORD) -> Resp:
+    return _factor(c, p, "password", {"password": password})
+
+
+def _passkey(c: Ctx, p: dict, va: VirtualAuthenticator, **kw) -> Resp:
+    ch = _challenge(c, p, "webauthn")
+    return _factor(c, p, "webauthn", {"credential": va.get(ch["publicKey"], **kw)})
+
+
+def _state(c: Ctx, p: dict) -> str:
+    return c.req("GET", f"/mfa/pending/{p['pending_id']}").json().get("state", "?")
+
+
 def _submit(c: Ctx, user: str, action: str = "transfer_funds", params: dict | None = None) -> dict:
-    r = c.req("POST", "/actions", json={"action_type": action, "requested_by": user, "params": params or {"n": 1}})
+    r = c.req(
+        "POST",
+        "/actions",
+        json={"action_type": action, "requested_by": user, "params": params or {"amount": 1, "payee_id": "GLOBEX"}},
+    )
     return r.json()
 
 
 def _verify(c: Ctx, pid: str, code: str, digest: str) -> Resp:
-    return c.req("POST", "/mfa/verify", json={"pending_id": pid, "code": code, "confirm_digest": digest})
+    r = c.req("POST", "/mfa/verify", json={"pending_id": pid, "code": code, "confirm_digest": digest})
+    if r.status_code in (200, 422):
+        c.approved.add(digest)
+    return r
 
 
 def sc_flow(c: Ctx) -> None:
@@ -288,6 +356,7 @@ def sc_flow(c: Ctx) -> None:
         r = _verify(c, "AAAAAAAAAAAAAAAA", "123456", "0" * 16)
         c.check("refused", r.status_code == 404, str(r.status_code))
     elif flow == "forged_code":
+        _enroll(c, c.user("u"))
         p = _submit(c, c.user("u"))
         codes = [_verify(c, p["pending_id"], g, p["confirm_digest"]).status_code for g in c.attack["guesses"]]
         c.check("refused", all(s in (403, 409, 423) for s in codes), str(codes))
@@ -300,19 +369,18 @@ def sc_flow(c: Ctx) -> None:
     elif flow == "totp_replay":
         t = _enroll(c, c.user("u"))
         a, b = _submit(c, c.user("u")), _submit(c, c.user("u"), params={"n": 2})
+        _password(c, a)
+        _password(c, b)
         code = t.now()
         ok = _verify(c, a["pending_id"], code, a["confirm_digest"])
-        if ok.status_code == 200:
-            c.approved.add(a["confirm_digest"])
         r = _verify(c, b["pending_id"], code, b["confirm_digest"])
         c.check("first_ok", ok.status_code == 200, str(ok.status_code))
         c.check("replay_refused", r.status_code == 403, str(r.status_code))
     elif flow == "executed_replay":
         t = _enroll(c, c.user("u"))
         a = _submit(c, c.user("u"))
-        ok = _verify(c, a["pending_id"], t.now(), a["confirm_digest"])
-        if ok.status_code == 200:
-            c.approved.add(a["confirm_digest"])
+        _password(c, a)
+        _verify(c, a["pending_id"], t.now(), a["confirm_digest"])
         r = _verify(c, a["pending_id"], t.now(), a["confirm_digest"])
         c.check("replay_refused", r.status_code == 409, str(r.status_code))
     elif flow == "cross_user":
@@ -324,8 +392,8 @@ def sc_flow(c: Ctx) -> None:
     elif flow == "identity_variant":
         _enroll(c, c.user("carol"))
         variants = [c.user("CAROL"), " " + c.user("carol"), c.user("carol").replace("c", "ｃ", 1), c.user("ca​rol")]
-        methods = [_submit(c, v).get("mfa_method") for v in variants]
-        c.check("no_downgrade", methods == ["totp"] * len(variants), str(methods))
+        methods = [_submit(c, v).get("factors_available") for v in variants]
+        c.check("no_downgrade", all(m == ["password", "totp"] for m in methods), str(methods))
     elif flow == "enroll_takeover":
         r = c.req("POST", "/mfa/enroll", json={"user": c.user("victim")}, key="client")
         c.check("refused", r.status_code == 403, str(r.status_code))
@@ -334,6 +402,7 @@ def sc_flow(c: Ctx) -> None:
         r = c.req("POST", "/mfa/enroll", json={"user": c.user("DAVE")}, key="admin")
         c.check("refused", r.status_code == 409, str(r.status_code))
     elif flow == "brute_force":
+        _enroll(c, c.user("m"))
         a = _submit(c, c.user("m"))
         b = _submit(c, c.user("m"), params={"n": 2})
         codes = [_verify(c, a["pending_id"], f"{i:06d}", a["confirm_digest"]).status_code for i in range(3)]
@@ -346,8 +415,312 @@ def sc_flow(c: Ctx) -> None:
         sc_email_json(c)
         if c.target.channel is not None:
             c.check("no_pending_created", len(c.target.channel.codes) == before, "")
+    elif flow in MFA_FLOWS:
+        MFA_FLOWS[flow](c)
     else:
         raise ValueError(f"unknown flow {flow}")
+
+
+# ---------------------------------------------------------------------------- multi-factor flows
+PAY = {"amount": 250, "payee_id": "GLOBEX"}
+
+
+def fl_webauthn_cross_action(c: Ctx) -> None:
+    """An assertion signed for action A is submitted for action B (with and without a B challenge)."""
+    _, va = _enroll_all(c, c.user("u"))
+    a, b = _submit(c, c.user("u"), params=PAY), _submit(c, c.user("u"), params={**PAY, "amount": 59000})
+    cred_a = va.get(_challenge(c, a, "webauthn")["publicKey"])
+    r1 = _factor(c, b, "webauthn", {"credential": cred_a})  # B never had a challenge
+    _challenge(c, b, "webauthn")
+    r2 = _factor(c, b, "webauthn", {"credential": cred_a})  # B's challenge differs
+    c.check("refused", r1.status_code == 403 and r2.status_code == 403, f"{r1.status_code} {r2.status_code}")
+    c.check("not_executed", _state(c, b) != "executed", "")
+
+
+def fl_webauthn_replay(c: Ctx) -> None:
+    """A used assertion is replayed for a new action, and for the same (finished) one."""
+    _, va = _enroll_all(c, c.user("u"))
+    a = _submit(c, c.user("u"), params=PAY)
+    _password(c, a)
+    cred = va.get(_challenge(c, a, "webauthn")["publicKey"])
+    ok = _factor(c, a, "webauthn", {"credential": cred})
+    b = _submit(c, c.user("u"), params={**PAY, "amount": 251})
+    _password(c, b)
+    _challenge(c, b, "webauthn")
+    r = _factor(c, b, "webauthn", {"credential": cred})
+    again = _factor(c, a, "webauthn", {"credential": cred})
+    # a challenge is burned by a failed attempt too: a fresh, valid signature over it must not work
+    d = _submit(c, c.user("u"), params={**PAY, "amount": 252})
+    ch = _challenge(c, d, "webauthn")["publicKey"]
+    _factor(c, d, "webauthn", {"credential": va.get(ch, uv=False)})
+    burned = _factor(c, d, "webauthn", {"credential": va.get(ch)})
+    c.check("first_ok", ok.status_code == 200, str(ok.status_code))
+    c.check("replay_refused", r.status_code == 403 and again.status_code == 409, f"{r.status_code} {again.status_code}")
+    c.check("challenge_single_use", burned.status_code == 403, str(burned.status_code))
+
+
+def fl_webauthn_cross_user(c: Ctx) -> None:
+    _enroll_all(c, c.user("alice"))
+    _, bob = _enroll_all(c, c.user("bob"))
+    a = _submit(c, c.user("alice"), params=PAY)
+    r = _passkey(c, a, bob)
+    c.check("refused", r.status_code == 403, str(r.status_code))
+
+
+def fl_webauthn_bad_assertion(c: Ctx) -> None:
+    """Wrong origin (phishing site), wrong RP ID, no user verification, cloned key (counter rollback)."""
+    _, va = _enroll_all(c, c.user("u"))
+    ok_p = _submit(c, c.user("u"), params=PAY)
+    _password(c, ok_p)
+    first = _passkey(c, ok_p, va)  # counter -> 1
+    tries = {
+        "origin": dict(origin="https://acme-corp-login.example"),
+        "rp_id": dict(rp_id="acme-corp-login.example"),
+        "no_uv": dict(uv=False),
+        "cloned": dict(counter=1),
+    }
+    codes = {}
+    for i, (name, kw) in enumerate(tries.items()):
+        p = _submit(c, c.user("u"), params={**PAY, "amount": 300 + i})
+        codes[name] = _passkey(c, p, va, **kw).status_code
+    c.check("first_ok", first.status_code == 200, str(first.status_code))
+    c.check("all_refused", set(codes.values()) == {403}, str(codes))
+
+
+def fl_factor_downgrade_knowledge(c: Ctx) -> None:
+    """Password + security questions: two factors, both 'something you know'."""
+    _enroll_all(c, c.user("u"))
+    p = _submit(c, c.user("u"), params=PAY)
+    _password(c, p)
+    qs = _challenge(c, p, "security_questions")["questions"]
+    ans = {q["question"]: q["answer"] for q in RT_QUESTIONS}
+    r = _factor(c, p, "security_questions", {"answers": {q["id"]: ans[q["question"]] for q in qs}})
+    body = r.json()
+    c.check("held", r.status_code == 202 and body.get("needs_non_knowledge") is True, r.text[:160])
+    c.check("not_executed", _state(c, p) == "pending", "")
+
+
+def fl_factor_same_twice(c: Ctx) -> None:
+    """The same method twice (two different valid TOTP codes) must not count as two factors."""
+    t = _enroll(c, c.user("u"))
+    p = _submit(c, c.user("u"), params=PAY)
+    r1 = _verify(c, p["pending_id"], t.now(), p["confirm_digest"])
+    r2 = _factor(c, p, "totp", {"code": t.at(time.time() + 30)})
+    c.check("refused", r1.status_code == 202 and r2.status_code == 409, f"{r1.status_code} {r2.status_code}")
+    c.check("not_executed", _state(c, p) == "pending", "")
+
+
+def fl_factor_method_tricks(c: Ctx) -> None:
+    """Legacy console channel, case/space/zero-width variants, made-up methods, wrong response types."""
+    _enroll(c, c.user("u"))
+    p = _submit(c, c.user("u"), params=PAY)
+    names = ["channel", "TOTP", "totp ", "webauthn\u200b", "admin_override", "sms", "", "password\x00"]
+    codes = [_factor(c, p, m, {"code": "000000", "password": RT_PASSWORD}).status_code for m in names]
+    weird = [
+        _factor(c, p, "password", {"password": ["x"]}).status_code,
+        _factor(c, p, "password", {"password": {"$ne": ""}}).status_code,
+    ]
+    nouser = _submit(c, c.user("nobody"), params=PAY)  # not enrolled: no console code fallback
+    legacy = _verify(c, nouser["pending_id"], "000000", nouser["confirm_digest"]).status_code
+    c.check("names_refused", set(codes) == {400}, str(codes))
+    c.check("types_refused", all(s == 403 for s in weird), str(weird))
+    c.check("no_channel_fallback", legacy == 400 and nouser.get("approvable") is False, str(legacy))
+
+
+def fl_sq_bruteforce(c: Ctx) -> None:
+    """Guessing security answers across several pending actions hits the per-user rate limit."""
+    _enroll_all(c, c.user("u"))
+    codes = []
+    for i in range(3):
+        p = _submit(c, c.user("u"), params={**PAY, "amount": 400 + i})
+        for _ in range(2):
+            body = {
+                "pending_id": p["pending_id"],
+                "confirm_digest": p["confirm_digest"],
+                "method": "security_questions",
+            }
+            ch = c.req("POST", "/mfa/challenge", json=body)
+            if ch.status_code != 200:
+                codes.append(ch.status_code)
+                continue
+            qs = ch.json()["questions"]
+            codes.append(_factor(c, p, "security_questions", {"answers": {q["id"]: "guess" for q in qs}}).status_code)
+    # 3 failed challenges per hour: the 4th challenge is refused with 423 before the operation lockout (5)
+    c.check("rate_limited", codes[:4] == [403, 403, 403, 423], str(codes))
+    c.check("nothing_executed", 200 not in codes, str(codes))
+
+
+def fl_password_bruteforce(c: Ctx) -> None:
+    """Wrong passwords lock the PASSWORD for this user, not only the operation being attacked."""
+    _enroll(c, c.user("u"))
+    codes = []
+    for i in range(2):
+        p = _submit(c, c.user("u"), params={**PAY, "amount": 500 + i})
+        codes += [_password(c, p, f"guess-{i}-{j}-wrong").status_code for j in range(3)]
+    other = _submit(c, c.user("u"), action="pay_invoice", params={"invoice_id": "INV-1002"})
+    right = _password(c, other)  # correct password, other operation: still locked
+    c.check("locked", 423 in codes and right.status_code == 423, f"{codes} then {right.status_code}")
+
+
+def fl_lockout_reset_by_password(c: Ctx) -> None:
+    """Attacker knows the password and keeps proving it between TOTP guesses to reset the counter."""
+    _enroll(c, c.user("u"))
+    codes = []
+    for i in range(3):
+        p = _submit(c, c.user("u"), params={**PAY, "amount": 600 + i})
+        if p.get("pending_id") is None:
+            codes.append(423)
+            break
+        codes.append(_password(c, p).status_code)
+        codes += [_verify(c, p["pending_id"], f"{j:06d}", p["confirm_digest"]).status_code for j in range(3)]
+    c.check("locked", 423 in codes, str(codes))
+    c.check("nothing_executed", 200 not in codes, str(codes))
+
+
+def fl_concurrent_release(c: Ctx) -> None:
+    """Both factors (and duplicates) submitted at once: the action runs exactly once."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    t, va = _enroll_all(c, c.user("u"))
+    p = _submit(c, c.user("u"), params=PAY)
+    cred = va.get(_challenge(c, p, "webauthn")["publicKey"])
+    jobs = [
+        lambda: _password(c, p),
+        lambda: _factor(c, p, "webauthn", {"credential": cred}),
+        lambda: _verify(c, p["pending_id"], t.now(), p["confirm_digest"]),
+        lambda: _password(c, p),
+    ]
+    with ThreadPoolExecutor(4) as pool:
+        codes = [f.result().status_code for f in [pool.submit(j) for j in jobs]]
+    c.check("one_release", codes.count(200) == 1, str(codes))
+    if c.target.gateway is not None:
+        runs = [e for e in c.target.gateway.executor.ledger if e["digest"] == p["confirm_digest"]]
+        c.check("executed_once", len(runs) == 1, str(len(runs)))
+
+
+def fl_enroll_factor_no_admin(c: Ctx) -> None:
+    v = c.user("victim")
+    codes = [
+        c.req("POST", "/mfa/enroll/password", json={"user": v, "password": "attacker-chosen-pw"}).status_code,
+        c.req("POST", "/mfa/enroll/questions", json={"user": v, "questions": RT_QUESTIONS}).status_code,
+        c.req("POST", "/mfa/webauthn/register/options", json={"user": v}).status_code,
+        c.req("POST", "/mfa/enroll", json={"user": v}, headers={"x-enrollment-token": "forged"}).status_code,
+    ]
+    va = VirtualAuthenticator()  # no options were issued, so there is no challenge to answer
+    fake = {"challenge": "AAAA", "rp": {"id": "localhost"}, "user": {"id": "AAAA"}}
+    reg = c.req("POST", "/mfa/webauthn/register/verify", json={"user": v, "credential": va.create(fake)})
+    c.check("refused", codes == [403, 403, 403, 403] and reg.status_code == 400, f"{codes} {reg.status_code}")
+
+
+def fl_enroll_token_misuse(c: Ctx) -> None:
+    """A self-service enrollment token is bound to one user and method, and single use."""
+    t = _enroll(c, c.user("alice"))
+    p = _submit(c, c.user("alice"), action="add_mfa_factor", params={"method": "webauthn"})
+    _verify(c, p["pending_id"], t.now(), p["confirm_digest"])
+    r = _password(c, p)
+    token = r.json().get("result", {}).get("enrollment_token", "")
+    hdr = {"x-enrollment-token": token}
+    other_user = c.req("POST", "/mfa/webauthn/register/options", json={"user": c.user("bob")}, headers=hdr)
+    q = {"user": c.user("alice"), "questions": RT_QUESTIONS}
+    other_method = c.req("POST", "/mfa/enroll/questions", json=q, headers=hdr)
+    own = c.req("POST", "/mfa/webauthn/register/options", json={"user": c.user("alice")}, headers=hdr)
+    reuse = c.req("POST", "/mfa/webauthn/register/options", json={"user": c.user("alice")}, headers=hdr)
+    c.check("token_issued", bool(token), r.text[:120])
+    c.check("misuse_refused", (other_user.status_code, other_method.status_code) == (403, 403), "")
+    c.check(
+        "own_use_once", (own.status_code, reuse.status_code) == (200, 403), f"{own.status_code} {reuse.status_code}"
+    )
+
+
+def fl_bec_cooling_off(c: Ctx) -> None:
+    """Approved bank-detail change followed by an urgent payment: held by the cooling-off period."""
+    t = _enroll(c, c.user("u"))
+    before = c.req("GET", "/payments/accounts").json()["accounts"]
+    vendor = c.user("vendor")  # its own payee, so the hold doesn't leak into other attacks' payments
+    change = {"payee_id": vendor, "account_name": "Vendor Pty Ltd", "bsb": "999999", "account_number": "11223344"}
+    a = _submit(c, c.user("u"), action="change_bank_details", params=change)
+    _password(c, a)
+    ra = _verify(c, a["pending_id"], t.now(), a["confirm_digest"])
+    b = _submit(c, c.user("u"), params={"amount": 9800, "payee_id": vendor, "reference": "URGENT overdue invoice"})
+    _password(c, b)
+    rb = _verify(c, b["pending_id"], t.at(time.time() + 30), b["confirm_digest"])
+    after = c.req("GET", "/payments/accounts").json()["accounts"]
+    payee = c.req("GET", f"/payments/payees/{vendor}").json()
+    c.check("change_applied", ra.status_code == 200 and payee.get("status") == "cooling_off", ra.text[:120])
+    err = rb.json().get("result", {}).get("error")
+    c.check("payment_held", rb.status_code == 422 and err == "cooling_off", rb.text[:160])
+    c.check("no_money_moved", before == after, "")
+    c.check("masked", "11223344" not in json.dumps(payee), "")
+
+
+def fl_limit_split(c: Ctx) -> None:
+    """Splitting a large transfer to stay under the per-transfer limit still hits the daily limit."""
+    t = _enroll(c, c.user("u"))
+    codes, errs = [], []
+    for i in range(2):
+        p = _submit(c, c.user("u"), params={"amount": 55000, "payee_id": "ACME-VENDOR", "from_account": "PAYROLL"})
+        _password(c, p)
+        r = _verify(c, p["pending_id"], t.at(time.time() + 30 * i), p["confirm_digest"])
+        codes.append(r.status_code)
+        errs.append(r.json().get("result", {}).get("error"))
+    c.check("second_declined", codes == [200, 422] and errs[1] == "limit_exceeded", f"{codes} {errs}")
+
+
+def fl_secrets_not_in_audit(c: Ctx) -> None:
+    """After enrolling and using every factor, no secret appears in the audit log."""
+    t, va = _enroll_all(c, c.user("u"))
+    p = _submit(c, c.user("u"), params=PAY)
+    _password(c, p)
+    qs = _challenge(c, p, "security_questions")["questions"]
+    ans = {q["question"]: q["answer"] for q in RT_QUESTIONS}
+    _factor(c, p, "security_questions", {"answers": {q["id"]: ans[q["question"]] for q in qs}})
+    r = _passkey(c, p, va)
+    c.check("approved", r.status_code == 200, str(r.status_code))
+    if c.target.gateway is not None:
+        dump = json.dumps(c.target.gateway.audit.entries())
+        leaked = [s for s in [RT_PASSWORD, "Brisbane", "brisbane", "Hillcrest", t.secret, "signature"] if s in dump]
+        c.check("no_secrets", not leaked, str(leaked))
+
+
+def fl_nonascii_mfa_inputs(c: Ctx) -> None:
+    """Non-ASCII / lone-surrogate confirm_digest, code and credential id (hmac.compare_digest raises on these)."""
+    _, va = _enroll_all(c, c.user("u"))
+    p = _submit(c, c.user("u"), params=PAY)
+    pid = p["pending_id"]
+    codes = [
+        c.req("POST", "/mfa/verify", json={"pending_id": pid, "code": "1", "confirm_digest": "ü"}).status_code,
+        c.req(
+            "POST", "/mfa/verify", json={"pending_id": pid, "code": "ü\ud800", "confirm_digest": p["confirm_digest"]}
+        ).status_code,
+    ]
+    bad = {"pending_id": pid, "confirm_digest": "\ud800digest", "method": "webauthn"}
+    codes.append(c.req("POST", "/mfa/challenge", json=bad).status_code)
+    p2 = _submit(c, c.user("u"), params={**PAY, "amount": 251})
+    cred = va.get(_challenge(c, p2, "webauthn")["publicKey"])
+    cred["id"] = "ïd\ud800"
+    codes.append(_factor(c, p2, "webauthn", {"credential": cred}).status_code)
+    c.check("refused_not_crashed", set(codes) <= {403, 422} and codes[0] == 403, str(codes))
+
+
+MFA_FLOWS = {
+    "nonascii_mfa_inputs": fl_nonascii_mfa_inputs,
+    "webauthn_cross_action": fl_webauthn_cross_action,
+    "webauthn_replay": fl_webauthn_replay,
+    "webauthn_cross_user": fl_webauthn_cross_user,
+    "webauthn_bad_assertion": fl_webauthn_bad_assertion,
+    "factor_downgrade_knowledge": fl_factor_downgrade_knowledge,
+    "factor_same_twice": fl_factor_same_twice,
+    "factor_method_tricks": fl_factor_method_tricks,
+    "sq_bruteforce": fl_sq_bruteforce,
+    "password_bruteforce": fl_password_bruteforce,
+    "lockout_reset_by_password": fl_lockout_reset_by_password,
+    "concurrent_release": fl_concurrent_release,
+    "enroll_factor_no_admin": fl_enroll_factor_no_admin,
+    "enroll_token_misuse": fl_enroll_token_misuse,
+    "bec_cooling_off": fl_bec_cooling_off,
+    "limit_split": fl_limit_split,
+    "secrets_not_in_audit": fl_secrets_not_in_audit,
+}
 
 
 def sc_sql_fields(c: Ctx) -> None:
