@@ -236,6 +236,12 @@ def _expect_common(c: Ctx, r: Resp) -> None:
             )
         if "features_any" in exp:
             c.check("feature", bool(names & set(exp["features_any"])), f"want one of {exp['features_any']}")
+        # weight keys (sub-cases such as link_text_mismatch_own_domain share the feature name)
+        keys = {f.get("key", f["name"]) for f in body.get("features", [])}
+        if "keys_all" in exp:
+            c.check("keys", set(exp["keys_all"]) <= keys, f"want all of {exp['keys_all']}; got {sorted(keys)}")
+        if "keys_none" in exp:
+            c.check("no_keys", not keys & set(exp["keys_none"]), f"must not fire {exp['keys_none']}")
     for h in exp.get("no_header", []):
         c.check(f"no_{h}", h.lower() not in r.headers, f"header {h} present")
 

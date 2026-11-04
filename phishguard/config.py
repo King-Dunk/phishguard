@@ -13,7 +13,8 @@ DEFAULT_MODEL = "claude-haiku-5-5"
 # split (local run, 70/30 content-hash split) 50 caught only 35.0% of phishing while 35 caught 60.8%
 # with easy_ham FPR 1.4% (vs 0.2%) and precision 97.5% (vs 98.7%). The cost is hard_ham (marketing-like
 # legitimate mail): FPR 56.1% vs 21.2%. A missed phish costs more than a flagged newsletter, and the
-# planned hybrid step sends exactly that 20-50 band to an LLM. See README "Real data results".
+# planned hybrid step sends exactly that 20-50 band to an LLM. Weights v4 at 35 (test split): recall
+# 70.4%, easy_ham FPR 0.8%, hard_ham FPR 25.8%. See README "Real data results".
 DEFAULT_THRESHOLD = 35.0
 
 
@@ -32,6 +33,12 @@ class Settings:
     max_tokens_per_request: int = 8000  # total token budget per /analyze call
     per_call_max_tokens: int = 1024
     phishing_threshold: float = DEFAULT_THRESHOLD
+    # Hybrid "benign vote" (off by default; DESIGN Q67): the LLM may lower a rule score only inside the
+    # gray zone, by at most llm_max_lower points, never below the zone's floor, and never when a hard
+    # security signal fired. Unmeasured with a real model.
+    llm_may_lower: bool = False
+    llm_lower_zone: tuple[float, float] = (20.0, 50.0)
+    llm_max_lower: float = 15.0
     mfa_timeout_seconds: int = 120
     mfa_max_attempts: int = 3
     audit_log_path: str | None = None
@@ -61,6 +68,7 @@ class Settings:
             max_tokens_per_request=int(os.environ.get("PHISHGUARD_MAX_TOKENS", "8000")),
             per_call_max_tokens=int(os.environ.get("PHISHGUARD_PER_CALL_MAX_TOKENS", "1024")),
             phishing_threshold=float(os.environ.get("PHISHGUARD_THRESHOLD", str(DEFAULT_THRESHOLD))),
+            llm_may_lower=os.environ.get("PHISHGUARD_LLM_MAY_LOWER") == "1",
             mfa_timeout_seconds=int(os.environ.get("PHISHGUARD_MFA_TIMEOUT", "120")),
             mfa_max_attempts=int(os.environ.get("PHISHGUARD_MFA_MAX_ATTEMPTS", "3")),
             audit_log_path=os.environ.get("PHISHGUARD_AUDIT_LOG"),

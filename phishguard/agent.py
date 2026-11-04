@@ -39,8 +39,8 @@ class PhishingAgent:
 
     def analyze(self, email: EmailMessage) -> AnalysisResult:
         s = self.settings
-        # Deterministic floor: the LLM may raise the score but can never lower it
-        # (guards against a prompt-injected model declaring a phish "safe").
+        # Deterministic floor: the LLM may raise the score. It may lower it only through lowered_risk()
+        # (opt-in, gray zone only, capped, vetoed by hard signals), so an injected "safe" can't clear a phish.
         base_risk, base_feats = analyze_email(email, self.ctx)
         toolbox = ReadOnlyToolbox(email, self.ctx)
         messages: list[dict] = [{"role": "user", "content": f"Analyze email id={email.id}. Use the tools to read it."}]
@@ -91,6 +91,8 @@ class PhishingAgent:
                 break  # unparseable answer: fall back to deterministic result
 
         final = base_risk if llm_risk is None else max(base_risk, llm_risk)
+        if llm_risk is not None and llm_risk < base_risk:
+            final = lowered_risk(base_risk, llm_risk, [f.key for f in base_feats], s)
         return AnalysisResult(
             risk_percent=round(final, 1),
             features=[f.to_dict() for f in base_feats],
@@ -102,6 +104,48 @@ class PhishingAgent:
             input_tokens=in_tok,
             output_tokens=out_tok,
         )
+
+
+# Signals an LLM "benign" vote can never cancel: an attacker controls the mail the model reads, so a
+# model talked into "this is fine" must not clear authentication failures, look-alikes, credential
+# harvesting, dangerous attachments or instructions aimed at the model itself.
+HARD_SIGNALS = frozenset(
+    {
+        "auth_fail",
+        "auth_fail_multi",
+        "homoglyph_domain",
+        "lookalike_domain",
+        "lookalike_link",
+        "executive_impersonation",
+        "display_name_spoof",
+        "header_anomaly",
+        "reply_to_freemail",
+        "prompt_injection_attempt",
+        "hidden_html_text",
+        "obfuscated_text",
+        "bank_detail_change",
+        "credential_action",
+        "link_brand_impersonation",
+        "link_at_obfuscation",
+        "link_ip_host",
+        "link_data_uri",
+        "link_punycode",
+        "link_text_mismatch",
+        "risky_attachment",
+        "encrypted_attachment_hint",
+        "archive_attachment",
+        "low_reputation",
+        "new_domain",
+    }
+)
+
+
+def lowered_risk(base: float, llm: float, keys: list[str], s: Settings) -> float:
+    """Score after an LLM vote below the rule score. Default: the rules win (no lowering at all)."""
+    lo, hi = s.llm_lower_zone
+    if not s.llm_may_lower or not lo <= base <= hi or HARD_SIGNALS.intersection(keys):
+        return base
+    return max(llm, base - s.llm_max_lower, lo)
 
 
 def _parse_final(text: str) -> tuple[float | None, str]:

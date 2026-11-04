@@ -2,7 +2,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir fastapi uvicorn pydantic anthropic pyotp pyyaml "webauthn>=2.2,<4" "argon2-cffi>=23.1"
+RUN pip install --no-cache-dir -r requirements.txt
 COPY phishguard ./phishguard
 RUN useradd --create-home --uid 10001 app
 USER app
