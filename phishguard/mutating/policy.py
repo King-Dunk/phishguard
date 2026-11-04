@@ -15,6 +15,12 @@ class ActionType(str, Enum):
     REPORT_PHISHING = "report_phishing"
     BLOCK_SENDER = "block_sender"
     SEND_REPLY = "send_reply"  # escalated to MFA if content touches money/accounts
+    # mailbox remediation (reversible; MFA only in bulk, see MAX_UNATTENDED_BATCH)
+    APPLY_LABEL = "apply_label"
+    ADD_WARNING_BANNER = "add_warning_banner"
+    # mailbox, always MFA: irreversible, or undoes a protection
+    DELETE_EMAIL = "delete_email"
+    RELEASE_FROM_QUARANTINE = "release_from_quarantine"
     # always MFA (funds / account change / invoice)
     TRANSFER_FUNDS = "transfer_funds"
     PAY_INVOICE = "pay_invoice"
@@ -34,8 +40,29 @@ ALWAYS_MFA = frozenset(
         ActionType.CHANGE_ACCOUNT_EMAIL,
         ActionType.RESET_PASSWORD,
         ActionType.CHANGE_ACCOUNT_SETTINGS,
+        # Deleting mail destroys evidence and can't be undone once the trash is purged. Releasing a
+        # quarantined mail puts a suspected phish back in front of the user, which is exactly what an
+        # attacker who talks a helpdesk into "please release my invoice" wants.
+        ActionType.DELETE_EMAIL,
+        ActionType.RELEASE_FROM_QUARANTINE,
     }
 )
+
+# Actions that change a real mailbox (phishguard/mutating/mailbox.py). Single-message quarantine,
+# junk, label and banner run without MFA: they are reversible and must be fast to be useful. A batch
+# larger than this needs MFA: a compromised client key or a poisoned verdict should not be able to
+# empty a whole inbox into quarantine in one call.
+MAILBOX_ACTIONS = frozenset(
+    {
+        ActionType.QUARANTINE_EMAIL,
+        ActionType.MARK_SPAM,
+        ActionType.APPLY_LABEL,
+        ActionType.ADD_WARNING_BANNER,
+        ActionType.DELETE_EMAIL,
+        ActionType.RELEASE_FROM_QUARANTINE,
+    }
+)
+MAX_UNATTENDED_BATCH = 10
 
 _SENSITIVE_TEXT = re.compile(
     r"wire|transfer|invoice|payment|\bpay\b|remit|bank|iban|swift|routing|account number|gift card|bitcoin|crypto"
@@ -88,6 +115,10 @@ def _walk(obj: Any, depth: int = 0):
 def requires_mfa(action: ActionType, params: dict[str, Any], reason: str = "") -> bool:
     if action in ALWAYS_MFA:
         return True
+    if action in MAILBOX_ACTIONS:
+        ids = params.get("message_ids")
+        if ids is not None and (not isinstance(ids, (list, tuple)) or len(ids) > MAX_UNATTENDED_BATCH):
+            return True  # bulk (or unreadable) batch: fail closed
     texts = [reason]
     for n, (kind, s) in enumerate(_walk(params)):
         if kind == "overflow" or n > MAX_PARAM_NODES:
