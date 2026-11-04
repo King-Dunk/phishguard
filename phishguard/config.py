@@ -7,6 +7,13 @@ from dataclasses import dataclass, field
 
 DEFAULT_MODEL = "claude-haiku-5-5"
 
+# Risk score (0-100) at which a mail is flagged as phishing. 35, not 50: on the real-corpus test
+# split (local run, 70/30 content-hash split) 50 caught only 35.0% of phishing while 35 caught 60.8%
+# with easy_ham FPR 1.4% (vs 0.2%) and precision 97.5% (vs 98.7%). The cost is hard_ham (marketing-like
+# legitimate mail): FPR 56.1% vs 21.2%. A missed phish costs more than a flagged newsletter, and the
+# planned hybrid step sends exactly that 20-50 band to an LLM. See README "Real data results".
+DEFAULT_THRESHOLD = 35.0
+
 
 def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     raw = os.environ.get(name)
@@ -22,6 +29,7 @@ class Settings:
     max_steps: int = 6  # agent iteration circuit breaker
     max_tokens_per_request: int = 8000  # total token budget per /analyze call
     per_call_max_tokens: int = 1024
+    phishing_threshold: float = DEFAULT_THRESHOLD
     mfa_timeout_seconds: int = 120
     mfa_max_attempts: int = 3
     audit_log_path: str | None = None
@@ -48,6 +56,7 @@ class Settings:
             max_steps=int(os.environ.get("PHISHGUARD_MAX_STEPS", "6")),
             max_tokens_per_request=int(os.environ.get("PHISHGUARD_MAX_TOKENS", "8000")),
             per_call_max_tokens=int(os.environ.get("PHISHGUARD_PER_CALL_MAX_TOKENS", "1024")),
+            phishing_threshold=float(os.environ.get("PHISHGUARD_THRESHOLD", str(DEFAULT_THRESHOLD))),
             mfa_timeout_seconds=int(os.environ.get("PHISHGUARD_MFA_TIMEOUT", "120")),
             mfa_max_attempts=int(os.environ.get("PHISHGUARD_MFA_MAX_ATTEMPTS", "3")),
             audit_log_path=os.environ.get("PHISHGUARD_AUDIT_LOG"),

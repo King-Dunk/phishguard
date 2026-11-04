@@ -3,46 +3,69 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import math
+import pathlib
 import re
 import unicodedata
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
+import yaml
+
 from ..models import EmailMessage
 
-WEIGHTS = {
-    "homoglyph_domain": 0.60,
-    "lookalike_domain": 0.55,
-    "link_text_mismatch": 0.45,
-    "lookalike_link": 0.45,
-    "bank_detail_change": 0.45,
-    "executive_impersonation": 0.40,
-    "display_name_spoof": 0.40,
-    "risky_attachment": 0.40,
-    "prompt_injection_attempt": 0.50,
-    "auth_fail": 0.35,
-    "low_reputation": 0.35,
-    "reply_to_mismatch": 0.30,
-    "suspicious_link": 0.30,
-    "credential_request": 0.30,
-    "new_domain": 0.25,
-    "secrecy_request": 0.25,
-    "urgency_language": 0.20,
-    "payment_keywords": 0.20,
-    "moderate_reputation": 0.15,
-    "return_path_mismatch": 0.12,
-    "header_anomaly": 0.45,
-    "obfuscated_text": 0.25,
-    "hidden_html_text": 0.30,
-    "young_domain": 0.10,
-    "no_authentication": 0.08,
-    "off_hours_send": 0.08,
-}
+WEIGHTS_PATH = pathlib.Path(__file__).with_name("weights.yaml")
+
+
+@dataclass(frozen=True)
+class WeightTable:
+    weights: dict[str, float]
+    brands: dict[str, tuple[str, ...]]
+
+    def get(self, name: str) -> float:
+        if name not in self.weights:
+            raise KeyError(f"feature {name!r} has no weight in weights.yaml")
+        return self.weights[name]
+
+
+def load_weights(path: str | pathlib.Path | None = None, overrides: dict[str, float] | None = None) -> WeightTable:
+    """Read and validate a weight table. `overrides` replaces individual weights (used by calibration)."""
+    raw = yaml.safe_load(pathlib.Path(path or WEIGHTS_PATH).read_text(encoding="utf-8"))
+    weights = {str(k): float(v) for k, v in raw["weights"].items()}
+    weights.update(overrides or {})
+    for k, v in weights.items():
+        if not 0.0 <= v <= 0.95:
+            raise ValueError(f"weight {k}={v} outside [0, 0.95]")
+    brands = {str(b).lower(): tuple(str(d).lower() for d in ds) for b, ds in (raw.get("brands") or {}).items()}
+    return WeightTable(weights, brands)
+
+
+DEFAULT_WEIGHTS = load_weights()
+WEIGHTS = DEFAULT_WEIGHTS.weights  # read-only view kept for callers of the old constant
+
 
 FREE_MAIL = {"gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "163.com", "qq.com", "proton.me"}
-SHORTENERS = {"bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd", "cutt.ly", "rb.gy"}
+SHORTENERS = {
+    "bit.ly",
+    "tinyurl.com",
+    "t.co",
+    "goo.gl",
+    "is.gd",
+    "cutt.ly",
+    "rb.gy",
+    "ow.ly",
+    "buff.ly",
+    "tiny.cc",
+    "shorturl.at",
+    "rebrand.ly",
+    "t.ly",
+    "s.id",
+    "v.gd",
+    "x.co",
+    "lnkd.in",
+}
 DEFAULT_SAFE_LINK_DOMAINS = ("google.com", "github.com", "zoom.us", "microsoft.com", "notion.so")
 
 URGENCY = re.compile(
@@ -66,17 +89,27 @@ CREDENTIAL = re.compile(
     r"\b(password|passcode|verify your account|confirm your (identity|account)|login credentials|account (suspended|locked))\b|验证.{0,4}账户|密码"
 )
 INJECTION = re.compile(
-    r"ignore (all |any )?(previous|prior|above) (instructions|rules)|you are now|system prompt"
+    r"ignore (all |any )?(previous|prior|above) (instructions|rules)|system prompt"
+    r"|\byou are now (a |an |the |my )?(system|admin(istrator)?|root|developer|ai|assistant|dan|jailbroken|unrestricted)\b"
     r"|disregard .{0,30}(instructions|rules)|mfa (is )?(already )?(verified|approved|passed)"
     r"|(skip|bypass) (the )?mfa|approve (this|the) (transfer|payment)|忽略.{0,6}(指令|规则)|已通过.{0,3}验证"
     r"|(you have been|you've been|you are|you're) (granted|given|authori[sz]ed)\b.{0,30}(mfa|authori[sz]ation|approval|clearance)"
-    r"|\b(as|acting as|in the role of) (the )?(system|admin(istrator)?|root|developer)\b"
+    r"|\b(acting as|act as|in the role of|pretend to be) (the |an? )?(system|admin(istrator)?|root|developer|ai|assistant)\b"
     r"|\b(execute|perform|initiate|complete) (the |this |a )?(wire |fund )?(transfer|payment|wire)\b.{0,40}\b(now|immediately|without)"
     r"|\b(transfer_funds|pay_invoice|approve_invoice|change_bank_details|reset_password|change_account_email)\b"
     r"|</?(system|instructions?|assistant|tool_use|tool_result)>"
     r"|已获得.{0,6}(mfa|授权|验证|批准)|以系统(身份|管理员)|系统指令|执行转账"
 )
 RISKY_EXT = (
+    ".pif",
+    ".com",
+    ".jse",
+    ".vbe",
+    ".wsf",
+    ".msi",
+    ".cpl",
+    ".xll",
+    ".chm",
     ".exe",
     ".scr",
     ".js",
@@ -110,7 +143,43 @@ _HOMOGLYPHS = str.maketrans(
     "aeopcyxijdgnsvoaptikmtn",
 )
 _URLISH = re.compile(r"^(https?://)?([a-z0-9-]+\.)+[a-z]{2,}(:\d+)?(/\S*)?$")
-DOUBLE_EXT = re.compile(r"\.(pdf|docx?|xlsx?)\.(exe|scr|js|bat|lnk)$")
+DOUBLE_EXT = re.compile(
+    r"\.(pdf|docx?|xlsx?|pptx?|rtf|txt|csv|jpe?g|png|gif|zip|rar|html?|mp3|mp4|wav)"
+    r"[\s._-]*\.(exe|scr|com|pif|js|jse|vbs|vbe|wsf|bat|cmd|lnk|hta|ps1|jar|msi|cpl|iso|img|html?|svg)$"
+)
+ARCHIVE_EXT = (
+    ".zip",
+    ".rar",
+    ".7z",
+    ".gz",
+    ".tgz",
+    ".tar",
+    ".bz2",
+    ".xz",
+    ".cab",
+    ".ace",
+    ".arj",
+    ".lzh",
+    ".uue",
+    ".z",
+)
+ARCHIVE_CTYPES = (
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-rar-compressed",
+    "application/vnd.rar",
+    "application/x-7z-compressed",
+    "application/gzip",
+    "application/x-tar",
+)
+OFFICE_LEGACY_EXT = (".doc", ".xls", ".ppt", ".rtf", ".dot", ".xlt", ".pps")
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff")
+PASSWORD_HINT = re.compile(
+    r"\b(password|passcode|passwd|pwd|pin)\s*(is\b\s*[:=]?|[:=-])\s*['\"]?[\w@#$%^&*!.-]{3,}"
+    r"|\bpassword[- ]protected\b|\bencrypted (zip|archive|file|attachment|document)\b"
+    r"|\b(use|enter) (the )?(password|code) \S{3,} to (open|view|extract)"
+    r"|解压密码|密码[:：]\s*\S{3,}"
+)
 _ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00ad"))
 # bidirectional controls: "invoice\u202efdp.exe" displays as "invoiceexe.pdf"
 BIDI = "\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
@@ -127,6 +196,11 @@ class DetectionContext:
     executives: tuple[str, ...] = ()
     safe_link_domains: tuple[str, ...] = DEFAULT_SAFE_LINK_DOMAINS
     company_names: tuple[str, ...] = ()  # empty: derived from trusted_domains
+    weights: WeightTable | None = field(default=None, compare=False, hash=False)  # None: weights.yaml
+
+    @property
+    def table(self) -> WeightTable:
+        return self.weights or DEFAULT_WEIGHTS
 
     def brands(self) -> tuple[str, ...]:
         if self.company_names:
@@ -146,6 +220,11 @@ class Feature:
     weight: float
     evidence: str
     contribution: float = 0.0  # share of the final 0-100 score (sums to the score)
+    key: str = ""  # weights.yaml entry used; differs from `name` for sub-cases (e.g. reply_to_freemail)
+
+    def __post_init__(self) -> None:
+        if not self.key:
+            object.__setattr__(self, "key", self.name)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -273,15 +352,68 @@ def _host(url: str) -> str:
 
 
 def _is_ip(host: str) -> bool:
-    return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", host))
+    """Dotted IPv4, IPv6, or the integer/hex forms browsers also accept (http://3232235777/)."""
+    h = host.strip("[]")
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        pass
+    return bool(re.fullmatch(r"(0x[0-9a-f]{1,8}|\d{8,10})", h)) or bool(
+        re.fullmatch(r"((0x[0-9a-f]+|\d+)\.){1,3}(0x[0-9a-f]+|\d+)", h) and "0x" in h
+    )
 
 
-def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -> list[Feature]:
+def link_signals(url: str, sreg: str, ctx: DetectionContext) -> list[tuple[str, str]]:
+    """Specific, explainable reasons a single link is suspicious (no generic 'unrelated host')."""
+    out: list[tuple[str, str]] = []
+    raw = url.strip()[:2048]
+    low = raw.lower()
+    if low.startswith(("data:", "javascript:", "vbscript:")):
+        return [("link_data_uri", f"{low.split(':', 1)[0]}: link")]
+    try:
+        parsed = urlparse(raw if "//" in raw else "//" + raw)
+        host = (parsed.hostname or "").lower()[:MAX_HOST]
+        port = parsed.port
+    except ValueError:
+        return out
+    if not host:
+        return out
+    if "@" in (parsed.netloc or ""):
+        shown = parsed.netloc.rsplit("@", 1)[0][:60]
+        out.append(("link_at_obfuscation", f"link shows '{shown}' before '@' but goes to {host}"))
+    if _is_ip(host):
+        out.append(("link_ip_host", f"link to IP address {host}"))
+    if port is not None and port not in (80, 443):
+        out.append(("link_nonstandard_port", f"link to {host}:{port}"))
+    if host in SHORTENERS or registrable(host) in SHORTENERS:
+        out.append(("link_shortener", f"shortened link via {host}"))
+    if "xn--" in host and not is_under(host, ctx.trusted_domains):
+        out.append(("link_punycode", f"punycode host {host}"))
+    reg = registrable(host)
+    tokens = set(re.split(r"[.\-]", host))
+    for brand, owned in ctx.table.brands.items():
+        if brand in tokens and reg not in owned and not any(host == d or host.endswith("." + d) for d in owned):
+            out.append(("link_brand_impersonation", f"{host} uses brand '{brand}' but is not {brand}'s domain"))
+            break
+    if not out and reg != sreg and not is_under(host, ctx.trusted_domains + ctx.safe_link_domains) and not _is_ip(host):
+        out.append(("unrelated_link_host", f"link to unrelated host {host}"))
+    return out
+
+
+def extract_features(
+    email: EmailMessage, ctx: DetectionContext | None = None, keep_zero: bool = False
+) -> list[Feature]:
+    """Fire every applicable feature. Weight-0 features are dropped unless `keep_zero` (calibration
+    needs to know they fired)."""
     ctx = ctx or DetectionContext()
+    table = ctx.table
     out: list[Feature] = []
 
-    def add(name: str, evidence: str) -> None:
-        out.append(Feature(name, WEIGHTS[name], evidence))
+    def add(name: str, evidence: str, key: str | None = None) -> None:
+        w = table.get(key or name)
+        if w > 0 or keep_zero:
+            out.append(Feature(name, w, evidence, key=key or name))
 
     sdom = domain_of(email.sender_email)
     sreg = registrable(sdom)
@@ -294,16 +426,25 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
     elif look:
         add("lookalike_domain", f"{sdom} imitates {look[0]} (similarity {look[1]:.2f})")
 
-    if email.reply_to and registrable(domain_of(email.reply_to)) != sreg:
-        add("reply_to_mismatch", f"reply-to {domain_of(email.reply_to)} differs from sender {sdom}")
-    if email.return_path and registrable(domain_of(email.return_path)) != sreg:
+    # Same organization (registrable domain) never counts as a mismatch. Mailing lists rewrite
+    # Reply-To and use their own bounce address by design, so list mail is down-weighted/exempt.
+    # List headers are sender-controlled, so they never silence the free-mail reply-to (BEC) case.
+    if email.reply_to:
+        rdom = domain_of(email.reply_to)
+        if registrable(rdom) != sreg:
+            if rdom in FREE_MAIL and sdom not in FREE_MAIL:
+                add("reply_to_mismatch", f"replies go to free mail {rdom}, sender is {sdom}", "reply_to_freemail")
+            elif email.list_mail:
+                add("reply_to_mismatch", f"list mail: reply-to {rdom} differs from {sdom}", "reply_to_mismatch_list")
+            else:
+                add("reply_to_mismatch", f"reply-to {rdom} differs from sender {sdom}")
+    if email.return_path and not email.list_mail and registrable(domain_of(email.return_path)) != sreg:
         add("return_path_mismatch", f"return-path {domain_of(email.return_path)} differs from sender {sdom}")
 
     auth = {"spf": email.spf, "dkim": email.dkim, "dmarc": email.dmarc}
     fails = [k for k, v in auth.items() if v == "fail"]
     if fails:
-        f = Feature("auth_fail", 0.5 if len(fails) >= 2 else WEIGHTS["auth_fail"], f"failed: {', '.join(fails)}")
-        out.append(f)
+        add("auth_fail", f"failed: {', '.join(fails)}", "auth_fail_multi" if len(fails) >= 2 else None)
     elif all(v == "none" for v in auth.values()):
         add("no_authentication", "no SPF/DKIM/DMARC result")
 
@@ -337,6 +478,9 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
     seen = "\n".join([text, *extra, hidden_txt])
     hidden = decoded_blobs(email.body)
     variants = [("", seen), (" (base64-decoded)", hidden), (" (de-obfuscated)", deobfuscate(seen))]
+    authenticated = email.dmarc == "pass" or (email.spf == "pass" and email.dkim == "pass")
+    known_partner = authenticated and bool(ctx.trusted_domains) and is_under(sdom, ctx.trusted_domains)
+    soft = {"urgency_language", "payment_keywords"} if known_partner else set()
     obfuscated = None
     for name, rx in (
         ("urgency_language", URGENCY),
@@ -348,7 +492,8 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
     ):
         for tag, t in variants:
             if t and (m := rx.search(t)):
-                add(name, f"matched '{m.group(0)}'{tag}")
+                key = f"{name}_trusted_sender" if name in soft else None
+                add(name, f"matched '{m.group(0)}'{tag}", key)
                 if tag and obfuscated is None:
                     obfuscated = f"keyword '{m.group(0)}' only visible{tag}"
                 break
@@ -367,22 +512,20 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
         if brand:
             add("display_name_spoof", f"display name '{email.sender_name}' uses brand '{brand}' but sent from {sdom}")
 
-    bad_link = None
-    for url in email.links:
+    # Each link signal counts once per mail (first evidence wins), whatever the number of links.
+    link_hits: dict[str, str] = {}
+    hrefs = list(email.links) + [lp.href for lp in email.link_pairs if lp.href not in email.links]
+    for url in hrefs[:200]:
         host = _host(url)
-        if not host:
-            continue
-        if homoglyph_of(host, ctx.trusted_domains) or lookalike_of(host, ctx.trusted_domains):
-            add("lookalike_link", f"link {host} imitates a trusted domain")
-            break
-        if bad_link is None and (
-            _is_ip(host)
-            or host in SHORTENERS
-            or (registrable(host) != sreg and not is_under(host, ctx.trusted_domains + ctx.safe_link_domains))
-        ):
-            bad_link = host
-    if bad_link:
-        add("suspicious_link", f"link to unrelated host {bad_link}")
+        if host and "lookalike_link" not in link_hits:
+            if homoglyph_of(host, ctx.trusted_domains) or lookalike_of(host, ctx.trusted_domains):
+                link_hits["lookalike_link"] = f"link {host} imitates a trusted domain"
+        for name, ev in link_signals(url, sreg, ctx):
+            link_hits.setdefault(name, ev)
+    if len(link_hits) > 1:
+        link_hits.pop("unrelated_link_host", None)
+    for name, ev in link_hits.items():
+        add(name, ev)
 
     for lp in email.link_pairs:
         shown = clean_text(lp.text).strip().rstrip(".,;")
@@ -394,18 +537,35 @@ def extract_features(email: EmailMessage, ctx: DetectionContext | None = None) -
             break
 
     names = [(a, "") for a in email.attachments] + [(m.filename, m.content_type) for m in email.attachment_meta]
+    att_hits: dict[str, str] = {}
+    images = others = 0
     for att, ctype in names:
-        a = clean_filename(att)
-        kind = (
-            "macro document"
-            if a.endswith(MACRO_EXT) or "macroenabled" in ctype.lower()
-            else "executable/container"
-            if a.endswith(RISKY_EXT) or DOUBLE_EXT.search(a) or ctype.lower() in RISKY_CTYPES
-            else None
-        )
-        if kind:
-            add("risky_attachment", f"{kind} attachment {att or ctype}")
-            break
+        a, ct = clean_filename(att), ctype.lower()
+        if DOUBLE_EXT.search(a):
+            att_hits.setdefault("risky_attachment", f"double extension {att}")
+        elif a.endswith(MACRO_EXT) or "macroenabled" in ct:
+            att_hits.setdefault("risky_attachment", f"macro document {att or ctype}")
+        elif a.endswith(RISKY_EXT) or ct in RISKY_CTYPES:
+            att_hits.setdefault("risky_attachment", f"executable/script/container {att or ctype}")
+        elif a.endswith(ARCHIVE_EXT) or ct in ARCHIVE_CTYPES:
+            att_hits.setdefault("archive_attachment", f"archive {att or ctype}")
+        elif a.endswith(OFFICE_LEGACY_EXT) or ct in (
+            "application/msword",
+            "application/vnd.ms-excel",
+            "application/rtf",
+        ):
+            att_hits.setdefault("office_legacy_attachment", f"legacy Office file {att or ctype}")
+        if a.endswith(IMAGE_EXT) or ct.startswith("image/"):
+            images += 1
+        elif a or ct:
+            others += 1
+    if names and (m := PASSWORD_HINT.search(seen)):
+        att_hits["encrypted_attachment_hint"] = f"attachment with password hint '{m.group(0)[:40]}'"
+    words = len(re.findall(r"\w+", text))
+    if images and not others and words < 25:
+        att_hits["image_lure"] = f"{images} image attachment(s), {words} words of text"
+    for name, ev in att_hits.items():
+        add(name, ev)
 
     ts = email.timestamp
     if ts.weekday() >= 5 or ts.hour < 7 or ts.hour >= 20:

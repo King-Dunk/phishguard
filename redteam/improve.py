@@ -309,12 +309,14 @@ def simulate(misses: list[Miss], ham: list[str], phrases: list[str], weight: flo
 FEATURES = "phishguard/readonly/features.py"
 
 
+WEIGHTS_FILE = "phishguard/readonly/weights.yaml"
+
+
 def build_patch(pattern: str, weight: float, base: pathlib.Path = REPO) -> str:
+    """Diff adding a `soft_bec_phrasing` regex (features.py) and its weight (weights.yaml).
+    Returns "" if either anchor is missing, so a stale generator yields no patch, never a broken one."""
     src = (base / FEATURES).read_text(encoding="utf-8")
     new = src.replace(
-        '    "obfuscated_text": 0.25,\n', f'    "obfuscated_text": 0.25,\n    "soft_bec_phrasing": {weight},\n', 1
-    )
-    new = new.replace(
         "RISKY_EXT = (\n",
         f"# PROPOSED by redteam/improve.py -- review before merging\nSOFT_BEC = re.compile({pattern!r})\nRISKY_EXT = (\n",
         1,
@@ -324,12 +326,22 @@ def build_patch(pattern: str, weight: float, base: pathlib.Path = REPO) -> str:
         '        ("prompt_injection_attempt", INJECTION),\n        ("soft_bec_phrasing", SOFT_BEC),\n',
         1,
     )
-    if new == src:
+    wsrc = (base / WEIGHTS_FILE).read_text(encoding="utf-8")
+    anchor = "  obfuscated_text: "
+    if new.count("SOFT_BEC") != 2 or anchor not in wsrc:
         return ""
-    diff = difflib.unified_diff(
-        src.splitlines(keepends=True), new.splitlines(keepends=True), fromfile=f"a/{FEATURES}", tofile=f"b/{FEATURES}"
-    )
-    return "".join(diff)
+    line = next(ln for ln in wsrc.splitlines(keepends=True) if ln.startswith(anchor))
+    wnew = wsrc.replace(line, line + f"  soft_bec_phrasing: {weight}  # PROPOSED by redteam/improve.py\n", 1)
+    parts = []
+    for path, a, b in ((FEATURES, src, new), (WEIGHTS_FILE, wsrc, wnew)):
+        parts.append(
+            "".join(
+                difflib.unified_diff(
+                    a.splitlines(keepends=True), b.splitlines(keepends=True), fromfile=f"a/{path}", tofile=f"b/{path}"
+                )
+            )
+        )
+    return "".join(parts)
 
 
 def regression_draft(misses: list[Miss]) -> str:

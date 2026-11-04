@@ -15,7 +15,7 @@
 3. **Explainable scoring on real mail.** Raw RFC 822 / `.eml` input (multipart, HTML, attachments). Every feature reports its contribution in score points, and the contributions add up to the final score, so an analyst sees *why* a mail scored 68%.
 4. **Red team in a sandbox, with fixes.** 59 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 10 real problems, all fixed with regression tests.
 5. **Self-improvement that cannot touch security code.** `redteam/improve.py` mines missed phishing and drafts rule proposals for a human; patches that touch the MFA gateway are refused by code.
-6. **Hybrid rules + LLM to save money.** Rules handle clear-cut mail for free; only the gray zone (score 30-70) is sent to the LLM. `evaluate.py` measures the trade-off side by side.
+6. **Hybrid rules + LLM to save money.** Rules handle clear-cut mail for free; only the gray zone (score 20-50, around the default threshold of 35) is sent to the LLM. `evaluate.py` measures the trade-off side by side.
 
 Production hardening in this version:
 
@@ -143,6 +143,7 @@ Real output of `bash examples/run_demo.sh` (MockLLM, API key auth on, SQLite per
 pip install -r requirements.txt
 python -m pytest                                          # MockLLM only, no network
 python -m phishguard.dataset.evaluate --n 200 --seed 42   # rules-mode comparison table
+python scripts/calibrate.py --help                        # real-corpus weight calibration (dev split only)
 PHISHGUARD_API_KEYS=dev-key uvicorn phishguard.api:get_app --factory --port 8000
 bash examples/run_demo.sh                                 # end-to-end demo
 docker build -t phishguard . && docker run -p 8000:8000 -e PHISHGUARD_API_KEYS=change-me phishguard  # non-root
@@ -160,6 +161,7 @@ docker build -t phishguard . && docker run -p 8000:8000 -e PHISHGUARD_API_KEYS=c
 | `PHISHGUARD_TRUSTED_DOMAINS`, `PHISHGUARD_EXECUTIVES` | `acme-corp.com`, empty | for lookalike and impersonation checks |
 | `PHISHGUARD_API_KEYS` | none | comma-separated client keys; **required** (server refuses to start without them) |
 | `PHISHGUARD_ALLOW_NO_AUTH` | unset | `1` disables auth; local development only |
+| `PHISHGUARD_THRESHOLD` | 35 | risk score at which `is_phishing` is true (see "Real data results" for why 35, not 50) |
 | `PHISHGUARD_RATE_LIMIT` | 60 | requests per key per minute |
 | `PHISHGUARD_DB_PATH` | none | SQLite file for pending MFA, audit, TOTP, lockouts (memory if unset) |
 | `PHISHGUARD_MFA_MAX_ATTEMPTS` | 3 | bad codes before one pending action is rejected |
@@ -188,7 +190,7 @@ All routes except `/health` need header `X-API-Key`. Missing or wrong key: 401; 
 | Endpoint | Description |
 |---|---|
 | `GET /health` | status, version, mode, model, auth and persistence mode |
-| `POST /analyze` | body `{"email": {...}}`; returns `risk_percent`, `is_phishing` (>= 50), `features[{name, weight, evidence, contribution}]` sorted by contribution, `explanation`, `steps_used`, `tokens_used`, `circuit_break` |
+| `POST /analyze` | body `{"email": {...}}`; returns `risk_percent`, `is_phishing` (risk >= `threshold`, default 35), `threshold`, `features[{name, weight, evidence, contribution}]` sorted by contribution, `explanation`, `steps_used`, `tokens_used`, `circuit_break` |
 | `POST /analyze/eml` | body `{"raw": "<RFC 822 text>"}` (max 2 MB, else 413); same output plus `parsed` (from, reply-to, return-path, SPF/DKIM/DMARC, attachment metadata) |
 | `POST /actions` | body `{action_type, params, requested_by, reason}`; 200 executed, or 202 `pending_mfa` with `pending_id`, `confirm_digest`, `mfa_method` (`totp` or `channel`); 400 unknown action; 423 operation locked |
 | `POST /mfa/enroll` | admin key only; body `{user}`; returns `otpauth_uri` (render as QR); 403 without admin key, 409 if already enrolled |
@@ -200,22 +202,22 @@ Always-MFA actions: `transfer_funds`, `pay_invoice`, `approve_invoice`, `change_
 ## Evaluation
 
 ```bash
-python -m phishguard.dataset.evaluate --n 200 --seed 42                          # rules only (what CI runs)
+python -m phishguard.dataset.evaluate --n 200 --seed 42 --sweep                  # rules only (what CI runs)
 ANTHROPIC_API_KEY=... python -m phishguard.dataset.evaluate --n 200 --modes rules,llm,hybrid \
     --price-in <USD/MTok> --price-out <USD/MTok>
 ```
 
-Measured on this repo (600 synthetic mails, threshold 50%):
+Measured on this repo (600 synthetic mails, threshold 35):
 
 | Mode | Accuracy | Precision | Recall | F1 | Avg latency | LLM call rate | Cost / 1k emails |
 |---|---|---|---|---|---|---|---|
-| rules | 97.3% | 100.0% | 94.7% | 97.3% | ~0.14 ms | 0% | $0 |
+| rules | 97.8% | 100.0% | 95.7% | 97.8% | ~0.26 ms | 0% | $0 |
 | llm | not run: no `ANTHROPIC_API_KEY` was available | | | | | 100% | |
 | hybrid | not run: no `ANTHROPIC_API_KEY` was available | | | | | | |
 
-Confusion for rules: TP 285, FP 0, TN 299, FN 16 (BEC recall 92%, payment chasing 100%). Latency depends on the machine.
+Confusion for rules: TP 288, FP 0, TN 299, FN 13 (BEC recall 93.5%, payment chasing 100%). Latency depends on the machine. Besides the table, `evaluate.py` reports recall at a fixed 1% and 5% false-positive rate (`--fpr-ref easy_ham` to measure FPR on one category) and, with `--sweep`, every threshold from 30 to 60 in steps of 5.
 
-**Why hybrid (the money argument).** Most mail is clear-cut: internal notes score near 0, a punycode sender with a failed DMARC scores near 100. Paying an LLM to confirm either is waste. Hybrid runs the free rules first and calls the LLM only when the rule score lands in the gray zone (30-70 by default, `--gray-low/--gray-high`). Cost scales with the gray-zone share instead of with total volume, and the "LLM call rate" column shows that share directly. On this synthetic set 100 of 600 mails (16.7%) fall in 30-70, so hybrid would make about 1/6 of the LLM calls of the llm mode; all 16 rule misses score 36-45 and are inside that zone, which is exactly where an LLM can help. The real share on real mail must be measured. Caveat: the LLM can only *raise* a score (anti-injection floor), so hybrid can recover gray-zone misses but cannot remove false positives.
+**Why hybrid (the money argument).** Most mail is clear-cut: internal notes score near 0, a punycode sender with a failed DMARC scores near 100. Paying an LLM to confirm either is waste. Hybrid runs the free rules first and calls the LLM only when the rule score lands in the gray zone (20-50 by default, `--gray-low/--gray-high`; centered on the default threshold of 35). Cost scales with the gray-zone share instead of with total volume, and the "LLM call rate" column shows that share directly. On this synthetic set 41 of 600 mails (6.8%) fall in 20-50; 9 of the 13 rule misses (scores 22 and 31) are inside it, the other 4 score 15. The real share on real mail must be measured. Caveat: the LLM can only *raise* a score (anti-injection floor), so hybrid can recover gray-zone misses but cannot remove false positives.
 
 **Read this carefully:** the dataset is synthetic, and the rules and the generator were written by the same author, so they share assumptions. Treat these numbers as a regression baseline. The 10 hand-written `.eml` files in `tests/fixtures/` check each new signal, not accuracy. Real validation needs labeled real mail.
 
@@ -234,9 +236,63 @@ python -m phishguard.dataset.evaluate --dataset external --limit 2000 --json
 
 Redistribution terms are set by each publisher (check the source pages), so raw mail is **never committed**: `data/external/` is in `.gitignore` and `.dockerignore`. Neither project publishes checksums, so the script uses trust-on-first-use: it records each file's SHA-256 in `data/external/checksums.json` and refuses a changed file later (`--expect-sha256 NAME=HEX` pins a known hash). Archives are extracted by `safe_extract()`, which rejects absolute paths, `..`, links and size bombs (the red team tests this too). Messages go through the same `.eml` parser as the API; ones it refuses (e.g. MIME bombs) are counted as skipped and reported, not dropped silently. The output is a P/R/F1 table plus a per-category confusion matrix (`easy_ham`, `hard_ham`, `nazario_phish`).
 
-**Status: not run.** The network policy of the environment this was built in blocks both hosts (HTTP 403 at the proxy), so there are no real-corpus numbers. The pipeline is tested offline with a mocked download and a small fake corpus (`tests/test_external_dataset.py`).
+The download needs network access to both hosts; the cloud environment this repo is built in blocks them, so real-corpus runs happen locally. The pipeline is tested offline with a mocked download and a small fake corpus (`tests/test_external_dataset.py`, `tests/test_calibration.py`).
 
-**Synthetic vs real: expected gap (to be measured, not measured yet).** The rules lean on signals the synthetic set was built around: look-alikes of *our* domains, *our* executives' names, sender reputation and domain age. In the public corpora none of those exist (no company context, reputation and domain age are absent), so most of the score must come from wording, links, attachments and SPF/DKIM/DMARC headers, which old mail often lacks. Expect recall well below the synthetic 94.7% and more false positives on `hard_ham` (marketing mail with urgency and payment words). That gap is the point of running it: it shows how much of the synthetic score comes from shared assumptions.
+### Dev/test protocol (anti-overfitting)
+
+`--split` divides the external data 70/30 into **dev** and **test** by a salted hash of each message's content, so the split is identical on every machine and duplicates can't sit on both sides. All tuning happens on dev: `scripts/error_analysis.py` (aggregate statistics only, safe to commit) and `scripts/calibrate.py` (grid search with an L1 pull toward the hand-set weights, an inner held-out slice, frozen security features, and output to a *suggestion* file that never overwrites `weights.yaml`). **This README reports only test-split numbers**, measured once after the weights are frozen.
+
+```bash
+python scripts/download_datasets.py
+python -m phishguard.dataset.evaluate --dataset external --split                 # dev and test rows; quote test only
+python scripts/error_analysis.py --split dev --out dev_error_analysis.md            # aggregates, no content
+python scripts/calibrate.py --out weights.suggested.yaml                           # dev only; recall s.t. easy_ham FPR <= 1%
+python -m phishguard.dataset.evaluate --dataset external --split --sweep --fpr-ref easy_ham \
+    --weights weights.suggested.yaml --threshold <suggested threshold>
+```
+
+### Real data results
+
+**Source:** the maintainer's local run of `python -m phishguard.dataset.evaluate --dataset external --split` on the public corpora, test split (30%, fixed salted content-hash split; the same split on every machine). Rules mode. Not reproducible in the cloud build environment (no network access to the corpora). Numbers below are copied from that run, nothing else.
+
+| Real corpus, **test split** | Recall | Precision | FPR easy_ham | FPR hard_ham |
+|---|---|---|---|---|
+| `weights.yaml` v2, threshold 50 | 35.0% | 98.7% | 0.2% | 21.2% |
+| `weights.yaml` v2, threshold 35 | 60.8% | 97.5% | 1.4% | 56.1% |
+| **`weights.yaml` v3 (FPR-constrained calibration), threshold 35 (default)** | **69.6%** | **98.0%** | **0.9%** | 59.1% |
+| `calibrate.py` suggestion (old F1 objective, rejected) | 88.4% | 86.0% | 38.2% | 83.3% |
+| *Reference: v1 rules, threshold 50, whole corpus (not a held-out split)* | *60.0%* | *87.7%* | *22.7%* | *34.4%* |
+
+**v3** is the output of the FPR-constrained `calibrate.py` (dev split only, `no_authentication`/`off_hours_send` frozen), checked once on the test split: +8.8 points of recall over v2 with *lower* easy_ham FPR (0.9% vs 1.4%). The calibrator raised `reply_to_mismatch` and `return_path_mismatch` (non-list mail), `link_shortener`, `archive_attachment` and `image_lure`. Synthetic F1 at 35 is 96.1%. hard_ham remains the weak spot (59.1%), which is what the hybrid step targets.
+
+Compared with v1 (threshold 50), v2 at threshold 35 keeps the same recall (60.8% vs 60.0%) while easy_ham false positives fall from 22.7% to 1.4%. hard_ham (legitimate, marketing-like mail) got worse at 35 (56.1% vs 34.4%). The v1 row comes from a different evaluation set (whole corpus), so treat that comparison as indicative only. This round added `urgency_language_trusted_sender`/`payment_keywords_trusted_sender` damping. It only applies when trusted domains are configured, so it is inert on the public corpora, and the v2 numbers above still describe this version.
+
+**Trade-off: compromised internal mailboxes.** When trusted domains are configured, keyword-only signals (urgency, payment words) are damped for authenticated mail from those domains, which cut false positives on legitimate supplier invoice reminders. The cost: 13 of 200 synthetic BEC mails sent from a *compromised internal mailbox* (authenticated, trusted domain) are no longer flagged. This is deliberate defense in depth: detection is tuned for a usable false-positive rate, and the payment itself still cannot happen without the hard-coded MFA gateway, which does not depend on the detection score.
+
+**Why the default threshold is 35.** At 50, v2 is very precise (98.7%) but misses 65% of phishing. At 35, recall rises by 25.8 points for +1.2 points of easy_ham FPR and -1.2 points of precision. The price is hard_ham: more than half of marketing-like legitimate mail is flagged. For a phishing filter a missed phish (credential theft, payment fraud) costs far more than a newsletter in quarantine, so 35 is the default. The 20-50 band, where hard_ham and missed phishing overlap, is exactly what the planned hybrid step hands to an LLM (Roadmap). Deployments with a lot of bulk mail and no hybrid step can set `PHISHGUARD_THRESHOLD=50`.
+
+**Why the calibration suggestion was rejected.** It raised recall to 88.4% by flagging 38.2% of easy_ham and 83.3% of hard_ham, which is unusable. Two causes: it raised `no_authentication` to 0.45, learning the dataset's era (2002 legitimate mail predates DKIM) instead of anything about phishing; and it optimized F1, which on a test set of about 3 phishing per legitimate mail rewards flagging everything. `calibrate.py` now maximizes recall subject to easy_ham FPR <= 1% (or a class-balanced metric), freezes era/time-zone features by default, and prints a suggested threshold. See "Evaluation pitfalls".
+
+### Evaluation pitfalls
+
+- **F1 and accuracy depend on the class ratio.** The test split has about 3 phishing per legitimate mail. A classifier that flags *everything* scores precision ~75%, recall 100%, F1 ~86%, which is better than the default operating point's F1, while being useless. Use measures that don't move with the ratio: recall at a fixed false-positive rate (`Recall @1% FPR` / `@5% FPR` columns), per-category FPR, or a class-balanced metric. A real inbox is mostly legitimate, which makes false positives far more frequent per day than this test split suggests.
+- **Era bias.** SpamAssassin ham is from 2002; the phishing spans 2004-2024. Anything that changed over time, such as DKIM/DMARC adoption, HTML habits or time zones, separates the classes in this corpus without saying anything about phishing. A learner will happily use it (`no_authentication` 0.01 -> 0.45). Hence the default `--frozen no_authentication,off_hours_send`.
+- **easy_ham vs hard_ham.** A constraint on easy_ham FPR says nothing about hard_ham. Report both; `--max-fpr-hard` adds a second cap.
+- **Look at test once.** Calibrate and analyze on dev; a test number seen twice is a dev number.
+
+### What changed from the real-corpus error analysis### What changed from the real-corpus error analysis
+
+Each change and its evidence is in `docs/DESIGN.md` (Q31-Q39). In short:
+
+- The catch-all `suspicious_link` (82.6% of ham vs 84.3% of phish, +23 points each time) is split into specific signals (IP host, shortener, brand on a foreign domain, non-standard port, `@` obfuscation, `data:`/`javascript:`, punycode). The generic "unrelated host" part is weight 0.
+- Reply-To / Return-Path mismatches no longer count within one organization and are softened or ignored on mailing-list mail (`List-Id`, `List-Unsubscribe`, `Precedence: list|bulk`). A reply-to that goes to free mail keeps full weight even on list mail.
+- More attachment signals: broader double extensions, archives, legacy Office files, password hints next to an attachment, image-only lures.
+- Prompt-injection patterns no longer match mailing-list phrases ("you are now subscribed", "as root").
+- All weights live in `phishguard/readonly/weights.yaml`.
+
+**Dataset bias: missing authentication.** The legitimate mail (SpamAssassin, 2002) predates DKIM and DMARC, so 100% of it has no authentication result, while 86.3% of the phishing has none either. In this corpus "no SPF/DKIM/DMARC" mostly encodes the mail's *year*. `no_authentication` is therefore at the minimum weight (0.01), and any real-corpus number should be read with this in mind: a corpus of modern legitimate mail would score differently. Explicit authentication *failures* still count fully.
+
+**Synthetic vs real.** The rules lean on signals the synthetic set was built around: look-alikes of *our* domains, *our* executives' names, sender reputation and domain age. None of those exist in the public corpora, so the score there must come from wording, links, attachments and headers. The gap between the two is the honest measure of how much of the synthetic score comes from shared assumptions. Synthetic F1 is guarded by a test (>= 95% at the default threshold; currently 97.8%).
 
 ## Red Team Results
 
@@ -300,10 +356,10 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 ## Known limitations
 
 - The execution grant is an in-process guard. It stops the LLM and accidental calls, not malicious code in the same process. A real boundary needs the mutating side as a separate service with its own credentials.
-- TOTP secrets are stored unencrypted in SQLite; production needs envelope encryption (KMS) or an HSM. Enrollment is first-come: any API key holder can enroll a user who has no secret yet. Tie enrollment to SSO identity.
+- TOTP secrets are stored unencrypted in SQLite; production needs envelope encryption (KMS) or an HSM. Enrollment needs an admin key but is not yet tied to SSO identity.
 - API keys are shared service keys, not per-user identity; `requested_by` is still caller-supplied.
 - Rate limits and the SQLite store are per process. Multiple workers or hosts need Redis/Postgres.
-- Detection is rule-based with hand-set weights; real-LLM behavior and real-corpus accuracy are unmeasured (no API key, corpora blocked by the build environment's network policy).
+- Detection is rule-based with hand-set weights; real-LLM behavior is unmeasured. On real mail, recall at the default threshold is 60.8% with hard_ham FPR 56.1% (test split, local run).
 - Polite BEC with no money keywords and image-only lures are still missed (see red-team report); `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
 - No real mail, banking or MFA push integrations; actions are simulated by an in-memory ledger.
 
@@ -311,8 +367,8 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 
 - Run the mutating side as a separate service with mTLS and its own credentials.
 - Shared store (Postgres/Redis) for multi-instance deployments; KMS-encrypted TOTP secrets; WebAuthn/push MFA.
-- Validate on a public labeled phishing corpus; calibrate weights.
-- Run the llm/hybrid evaluation with a real key and publish the numbers.
+- **Hybrid on real mail (next step).** Call the LLM only when the rule score is in the gray zone 20-50 (now the default for `--modes hybrid`). That band holds both the missed phishing at threshold 35 and most of the flagged hard_ham, so it's where an LLM's reading of intent can add separation, and clear-cut mail stays free. Plan: run `--dataset external --split --modes rules,hybrid` locally and compare recall at 1% easy_ham FPR and hard_ham FPR against the rules row. One design caveat: today the LLM can only raise a score (injection floor), so it can recover misses but cannot clear hard_ham false positives. Lowering a score needs a separate, injection-resistant path (e.g. LLM "benign" votes may lower only within 20-50 and never below the content-only floor), with red-team tests first.
+- Calibrate on a modern legitimate-mail corpus, so era artifacts stop mattering.
 - Mailbox connectors (IMAP / Graph) behind the read-only interface.
 
 ## 中文简介
