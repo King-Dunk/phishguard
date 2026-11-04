@@ -70,14 +70,19 @@ class ImapConnector(MailboxConnector):
 
     # -- connection ------------------------------------------------------------------------
     def connect(self) -> imaplib.IMAP4:
-        if self.factory:
-            conn = self.factory(self.host, self.port)
-        elif self.tls == "implicit":
-            conn = imaplib.IMAP4_SSL(self.host, self.port, ssl_context=self.ssl_context, timeout=self.timeout)
-        else:
-            conn = imaplib.IMAP4(self.host, self.port, timeout=self.timeout)
-            if self.tls == "starttls":
-                conn.starttls(ssl_context=self.ssl_context)
+        try:
+            if self.factory:
+                conn = self.factory(self.host, self.port)
+            elif self.tls == "implicit":
+                conn = imaplib.IMAP4_SSL(self.host, self.port, ssl_context=self.ssl_context, timeout=self.timeout)
+            else:
+                conn = imaplib.IMAP4(self.host, self.port, timeout=self.timeout)
+                if self.tls == "starttls":
+                    conn.starttls(ssl_context=self.ssl_context)
+        except ssl.SSLError:
+            raise  # certificate problems must stay loud and specific
+        except (OSError, imaplib.IMAP4.error) as e:
+            raise ProviderError(f"cannot connect to {self.host}:{self.port}: {type(e).__name__}") from None
         try:
             if self.token_provider is not None:
                 tok = self.token_provider.token()
