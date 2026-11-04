@@ -136,8 +136,11 @@ class MFAGateway:
         requested_by = normalize_user(requested_by)
         digest = action_digest(action, params, requested_by)
         if not requires_mfa(action, params, reason):
-            self.audit.record("action_executed", action=action.value, digest=digest, by=requested_by, mfa=False)
-            return SubmitResult("executed", result=self.executor.run(_issue_grant(digest), action, params))
+            result = self.executor.run(_issue_grant(digest), action, params)
+            self.audit.record(
+                "action_executed", action=action.value, digest=digest, by=requested_by, mfa=False, ok=result["ok"]
+            )
+            return SubmitResult("executed", result=result)
 
         key = _op_key(requested_by, action)
         pid = secrets.token_urlsafe(12)
@@ -226,7 +229,13 @@ class MFAGateway:
             self._set_lock(key, 0, 0.0)  # success resets the consecutive-failure counter
             result = self.executor.run(_issue_grant(p.digest), p.action, p.params)
             self.audit.record(
-                "action_executed", pending_id=p.id, action=p.action.value, digest=p.digest, by=p.requested_by, mfa=True
+                "action_executed",
+                pending_id=p.id,
+                action=p.action.value,
+                digest=p.digest,
+                by=p.requested_by,
+                mfa=True,
+                ok=result["ok"],
             )
             return result
 

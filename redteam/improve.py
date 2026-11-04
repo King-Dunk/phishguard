@@ -43,6 +43,8 @@ PROTECTED = (
     "phishguard/api.py",  # exposes /actions and /mfa/*
     "phishguard/security.py",  # API auth and rate limiting
     "phishguard/config.py",  # MFA timeouts, lockout thresholds, keys
+    "phishguard/connectors/",  # mailbox credentials, read-only boundary, webhook authentication
+    "phishguard/mailbox_guard.py",  # turns verdicts into mailbox actions via the gateway
     "redteam/improve.py",  # this guard itself
     "redteam/runner.py",  # the oracles that judge fixes
     "tests/",  # existing tests are the contract; drafts go to proposals/

@@ -16,6 +16,7 @@
 4. **Red team in a sandbox, with fixes.** 59 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 10 real problems, all fixed with regression tests.
 5. **Self-improvement that cannot touch security code.** `redteam/improve.py` mines missed phishing and drafts rule proposals for a human; patches that touch the MFA gateway are refused by code.
 6. **Hybrid rules + LLM to save money.** Rules handle clear-cut mail for free; only the gray zone (score 20-50, around the default threshold of 35) is sent to the LLM. `evaluate.py` measures the trade-off side by side.
+7. **Mailbox connectors.** Gmail / Google Workspace (Gmail API), Microsoft 365 / Outlook.com (Graph) and any IMAP-over-TLS mailbox can be scanned incrementally with read-only credentials. Quarantine, labels and warning banners are a separate, opt-in write credential behind the same MFA gateway. See [Mailbox connectors](#mailbox-connectors) and [docs/MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md).
 
 Production hardening in this version:
 
@@ -63,12 +64,16 @@ phishguard/
 ├── config.py     settings; API key from environment only
 ├── llm/          base, mock (rule-based), anthropic_client
 ├── readonly/     eml parser, features, explainable scoring, read-only tools
-├── mutating/     policy, gateway, executor, mfa channel, totp, audit, sqlite store
+├── connectors/   READ-ONLY mailbox connectors: gmail, graph, imap (+ presets), oauth, http (backoff),
+│                 secrets (redaction, 0600 token store), state (checkpoints), scanner, worker, webhooks
+├── mutating/     policy, gateway, executor, mfa channel, totp, audit, sqlite store,
+│                 mailbox (quarantine / junk / label / banner / delete / release per provider)
+├── mailbox_guard.py  scan loop + sink that submits remediation through the gateway
 └── dataset/      generator (3 email categories) and evaluate (rules / llm / hybrid)
 redteam/          payloads/*.yaml, runner, docker-compose sandbox, improve.py, report.md
 proposals/        human-review drafts written by improve.py
-scripts/          download_datasets.py, smoke_real_api.py
-tests/  examples/  docs/DESIGN.md
+scripts/          download_datasets.py, smoke_real_api.py, scan_mailbox.py
+tests/  examples/  docs/DESIGN.md  docs/MAILBOX_SETUP.md
 ```
 
 ## Threat model
@@ -197,7 +202,35 @@ All routes except `/health` need header `X-API-Key`. Missing or wrong key: 401; 
 | `POST /mfa/verify` | body `{pending_id, code, confirm_digest}`; 200 executed, 403 failed (`attempts_left`), 404 unknown, 409 finished, 410 timed out, 423 locked |
 | `GET /audit/verify` | `{chain_ok, first_broken}` |
 
-Always-MFA actions: `transfer_funds`, `pay_invoice`, `approve_invoice`, `change_bank_details`, `change_account_email`, `reset_password`, `change_account_settings`. Others run directly unless their params or reason mention money or accounts.
+Always-MFA actions: `transfer_funds`, `pay_invoice`, `approve_invoice`, `change_bank_details`, `change_account_email`, `reset_password`, `change_account_settings`, `delete_email`, `release_from_quarantine`. Mailbox actions on more than 10 messages at once also need MFA. Others run directly unless their params or reason mention money or accounts.
+
+## Mailbox connectors
+
+PhishGuard can pull mail from real mailboxes instead of waiting for `.eml` uploads. Step-by-step setup for non-experts (Google Cloud OAuth client, Azure app registration, IMAP app passwords) is in **[docs/MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md)**.
+
+```bash
+python scripts/scan_mailbox.py --provider gmail --authorize          # one-time sign-in, token stored outside the repo (0600)
+python scripts/scan_mailbox.py --provider gmail --last 20            # scan the last 20 messages, print verdicts
+python -m phishguard.connectors.worker --provider graph --interval 60   # poll, one JSON verdict per new message
+python -m phishguard.mailbox_guard --provider imap --action quarantine  # opt-in: act on verdicts via the MFA gateway
+```
+
+| Provider | API and read scope | Auth | Incremental cursor |
+|---|---|---|---|
+| Gmail / Google Workspace | Gmail API, `gmail.readonly`, `messages.get?format=raw` | Desktop OAuth (loopback + PKCE), or Workspace service account with domain-wide delegation | `historyId` via `history.list` |
+| Microsoft 365 / Outlook.com | Graph, `Mail.Read`, `/messages/{id}/$value` | Device code (delegated), or client credentials (app-only) | messages `delta` link, immutable IDs |
+| IMAP (iCloud, Yahoo, AOL, Fastmail, QQ, 163/126, Zoho, GMX, Yandex, ...) | IMAP4 over TLS, `EXAMINE` + `BODY.PEEK[]` | App password, or XOAUTH2 (Gmail / Outlook) | `UIDVALIDITY:UID` |
+
+How it fits the architecture:
+
+- `phishguard/connectors/` is read-side: it lists ids and downloads raw RFC 822 bytes, which go through the same `parse_eml` + `PhishingAgent.analyze` path as `/analyze/eml` (the 2 MB `EmlTooLarge` limit applies before download where the provider reports a size, and during streaming otherwise). It never imports `mutating/`. Tests check this with AST scans, an import-closure check, a run with `mutating` imports blocked, a scan for write verbs, and a runtime check that a full Gmail + Graph scan sends only GETs (plus token endpoints and read-scoped push subscriptions).
+- A read credential that also grants write scopes (`gmail.modify`, `Mail.ReadWrite`, ...) is refused. Write access is a separate credential in a separate token file, loaded only by `mutating/mailbox.py`, and only reachable as Executor handlers behind a gateway grant.
+- Scans are incremental and idempotent: a SQLite checkpoint store keeps the provider cursor (saved only after a round completes), every scanned id, and the content SHA-256. A message is never scanned or remediated twice, even after a crash, an expired cursor, IMAP renumbering or overlapping push notifications.
+- 429/503 (and Gmail's rate-limit 403s) back off honoring `Retry-After`; a 401 triggers one token refresh. Bearer tokens are sent only to the provider's own https hosts, so a tampered paging link can't leak them.
+- Secrets come only from environment variables or files outside the repo (refused if group/world readable). They are redacted from logs, output, the state DB and the audit log, and tests check all of these.
+- Optional push: Gmail via Pub/Sub (Google-signed JWT verified) and Graph change notifications (`validationToken` handshake, `clientState`), served by the worker's own small server, not by `api.py`. A notification only wakes the poller.
+
+**Status: tested against offline fakes only** (`httpx.MockTransport` for Gmail and Graph, a real-socket fake IMAP server over TLS). No real Google, Microsoft or IMAP account was used. See Known limitations.
 
 ## Evaluation
 
@@ -361,7 +394,12 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Rate limits and the SQLite store are per process. Multiple workers or hosts need Redis/Postgres.
 - Detection is rule-based with hand-set weights; real-LLM behavior is unmeasured. On real mail, recall at the default threshold is 60.8% with hard_ham FPR 56.1% (test split, local run).
 - Polite BEC with no money keywords and image-only lures are still missed (see red-team report); `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
-- No real mail, banking or MFA push integrations; actions are simulated by an in-memory ledger.
+- No banking or MFA push integrations; money/account actions are simulated by an in-memory ledger.
+- **Mailbox connectors were tested only against offline fakes**, written from the providers' public documentation. They have not been run against a real Gmail, Microsoft 365, Outlook.com or IMAP account, so error codes, paging edge cases and provider quirks (consent screens, NetEase/QQ behavior, Graph moves with immutable IDs) are unverified.
+- Gmail OAuth apps in "Testing" status get refresh tokens that expire after 7 days, and `gmail.readonly` is a restricted scope (Google verification is needed to publish). Personal use means re-authorizing weekly; Workspace "Internal" apps or a service account avoid this.
+- IMAP has no read-only credential: an app password can do anything. Read-only scanning is enforced in code (`EXAMINE`, `BODY.PEEK[]`, tests), not by the provider.
+- Graph cannot rewrite a received message, so warning banners there are unsupported (use an Exchange transport rule). IMAP "release from quarantine" isn't implemented. Without UIDPLUS, IMAP moves leave the original flagged `\Deleted` rather than risk a plain `EXPUNGE`.
+- The checkpoint store and polling worker are single-process; one worker per mailbox.
 
 ## Roadmap
 
@@ -369,8 +407,8 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Shared store (Postgres/Redis) for multi-instance deployments; KMS-encrypted TOTP secrets; WebAuthn/push MFA.
 - **Hybrid on real mail (next step).** Call the LLM only when the rule score is in the gray zone 20-50 (now the default for `--modes hybrid`). That band holds both the missed phishing at threshold 35 and most of the flagged hard_ham, so it's where an LLM's reading of intent can add separation, and clear-cut mail stays free. Plan: run `--dataset external --split --modes rules,hybrid` locally and compare recall at 1% easy_ham FPR and hard_ham FPR against the rules row. One design caveat: today the LLM can only raise a score (injection floor), so it can recover misses but cannot clear hard_ham false positives. Lowering a score needs a separate, injection-resistant path (e.g. LLM "benign" votes may lower only within 20-50 and never below the content-only floor), with red-team tests first.
 - Calibrate on a modern legitimate-mail corpus, so era artifacts stop mattering.
-- Mailbox connectors (IMAP / Graph) behind the read-only interface.
+- Mailbox connectors: run against real Gmail, Microsoft 365, Outlook.com and a few IMAP providers (iCloud, Fastmail, QQ, 163) and fix whatever the fakes got wrong; add certificate credentials for Graph app-only auth; a shared checkpoint store for several workers; per-mailbox rate budgets for large tenants.
 
 ## 中文简介
 
-PhishGuard 是一个防钓鱼邮件 Agent。最新一轮：红队沙箱（59 个攻击载荷，Docker 隔离或进程内运行）找到并修复了 10 个真实漏洞，包括深层嵌套参数绕过 MFA、TOTP 被大小写变体降级、MIME 炸弹和孤立代理字符导致崩溃、正则回溯拒绝服务；自我改进脚本只生成提案，碰到 MFA 相关代码的补丁直接拒绝；公开数据集脚本已交付，但因构建环境网络受限尚未运行。上一轮做了生产级加固：解析真实 .eml 邮件并给出每个特征的贡献分；MFA 改为 TOTP，带防重放和 5 次失败锁定；审计日志是 SHA-256 哈希链；API 有 Key 认证、限流和 SQLite 持久化；评测对比规则、LLM、混合三种模式（混合模式只把灰区邮件交给 LLM，用来省钱）。核心设计是两点：**读写硬隔离**（分析邮件的包和执行操作的包互相独立，只读侧在代码层面无法 import 变更侧，测试已证明）和 **MFA 强制拦截网关**（涉及资金、账户变更、发票的操作在代码里被挂起，要二次确认和带外验证码，超时自动拒绝，LLM 输出无法绕过）。测试和评测全部使用 MockLLM，不调用真实 API。数据集为合成数据，指标只作回归基线。详细设计见 [docs/DESIGN.md](docs/DESIGN.md)。
+PhishGuard 是一个防钓鱼邮件 Agent。最新一轮：红队沙箱（59 个攻击载荷，Docker 隔离或进程内运行）找到并修复了 10 个真实漏洞，包括深层嵌套参数绕过 MFA、TOTP 被大小写变体降级、MIME 炸弹和孤立代理字符导致崩溃、正则回溯拒绝服务；自我改进脚本只生成提案，碰到 MFA 相关代码的补丁直接拒绝；公开数据集脚本已交付，但因构建环境网络受限尚未运行。上一轮做了生产级加固：解析真实 .eml 邮件并给出每个特征的贡献分；MFA 改为 TOTP，带防重放和 5 次失败锁定；审计日志是 SHA-256 哈希链；API 有 Key 认证、限流和 SQLite 持久化；评测对比规则、LLM、混合三种模式（混合模式只把灰区邮件交给 LLM，用来省钱）。核心设计是两点：**读写硬隔离**（分析邮件的包和执行操作的包互相独立，只读侧在代码层面无法 import 变更侧，测试已证明）和 **MFA 强制拦截网关**（涉及资金、账户变更、发票的操作在代码里被挂起，要二次确认和带外验证码，超时自动拒绝，LLM 输出无法绕过）。测试和评测全部使用 MockLLM，不调用真实 API。数据集为合成数据，指标只作回归基线。新增邮箱连接器：Gmail / Google Workspace（Gmail API，只读权限 gmail.readonly）、Microsoft 365 / Outlook.com（Graph，Mail.Read）和通用 IMAP（仅 TLS，内置 iCloud、Yahoo、QQ 邮箱、163/网易、Zoho 等预设，支持授权码和 XOAUTH2），增量、幂等地拉取并扫描邮件；隔离、加标签、加警告横幅等操作需要单独开启的写权限凭据，并经过同一个 MFA 网关（删除和放行隔离邮件必须 MFA）。连接器目前只在离线模拟环境中测试过，尚未连接真实账户。配置步骤见 [docs/MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md)。详细设计见 [docs/DESIGN.md](docs/DESIGN.md)。
