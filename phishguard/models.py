@@ -47,6 +47,8 @@ class EmailMessage(BaseModel):
     link_pairs: list[DisplayedLink] = Field(default_factory=list, max_length=100)
     list_mail: bool = False  # List-Id / List-Unsubscribe / List-Post / Precedence: list|bulk|junk
     hidden_text: str = Field(default="", max_length=5000)  # CSS-hidden HTML text
+    inline_images: int = Field(default=0, ge=0, le=10000)  # <img> in the HTML body (tracking pixels excluded)
+    linked_images: int = Field(default=0, ge=0, le=10000)  # of those, images that are the content of a web link
     header_anomalies: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
     sender_reputation: float | None = Field(default=None, ge=0, le=1)
     sender_domain_age_days: int | None = Field(default=None, ge=0)

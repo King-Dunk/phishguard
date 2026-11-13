@@ -13,7 +13,7 @@
 1. **Hard read/write isolation.** Everything that analyzes mail lives in `phishguard/readonly/`. Everything that can change state lives in `phishguard/mutating/`. The LLM is only ever given read-only tools, and the read-only side cannot import the mutating side. Tests prove it.
 2. **Multi-factor enforcement gateway.** Actions touching funds, account changes or invoices are suspended in `mutating/gateway.py` and released only after **two different factors** pass (password, security questions, TOTP, passkey/WebAuthn; at least one must not be a knowledge factor), each checked against the echoed action digest, with timeout, attempt limits and lockout. Nothing the LLM, the email or the request body says can skip this.
 3. **Explainable scoring on real mail.** Raw RFC 822 / `.eml` input (multipart, HTML, attachments). Every feature reports its contribution in score points, and the contributions add up to the final score, so an analyst sees *why* a mail scored 68%.
-4. **Red team in a sandbox, with fixes.** 76 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 11 real problems, all fixed with regression tests.
+4. **Red team in a sandbox, with fixes.** 80 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 11 real problems, all fixed with regression tests.
 5. **Self-improvement that cannot touch security code.** `redteam/improve.py` mines missed phishing and drafts rule proposals for a human; patches that touch the MFA gateway are refused by code.
 6. **Payments behind open interfaces.** Approved actions go to a `PaymentProvider` / `AccountProvider`. The default `SimulatedBank` has balances, daily and per-transfer limits, idempotency and a cooling-off period for new or changed bank details; documented stubs show where a bank (ISO 20022), Stripe, Xero or MYOB adapter plugs in ([docs/PAYMENTS_INTEGRATION.md](docs/PAYMENTS_INTEGRATION.md)).
 7. **Hybrid rules + LLM to save money.** Rules handle clear-cut mail for free; only the gray zone (score 20-50, around the default threshold of 35) is sent to the LLM. `evaluate.py` measures the trade-off side by side.
@@ -418,7 +418,7 @@ Each change and its evidence is in `docs/DESIGN.md` (Q31-Q39). In short:
 
 ## Red Team Results
 
-`redteam/` holds 76 attacks in five YAML files (`payloads/`), a runner, and a Docker sandbox.
+`redteam/` holds 80 attacks in five YAML files (`payloads/`), a runner, and a Docker sandbox.
 
 ```bash
 python -m redteam.runner                      # in-process, writes redteam/report.md (pytest runs this)
@@ -436,10 +436,27 @@ Results (`redteam/report.md`, in-process). The Docker run gave the same totals f
 | a) Prompt injection (body, subject, filename, hidden HTML, zero-width, Base64, Chinese, fullwidth, fake tool markup) | 12 | 12/12 | 12/12 | 100% |
 | b) Privilege escalation / MFA bypass (no/bad key, bypass flags, deep params, forged codes, swapped digest, TOTP replay, cross-user approval, identity variants, enrollment takeover, brute force; passkey replay across actions/users, phishing origin, no UV, cloned key, knowledge-only downgrade, same factor twice, question/password brute force, lockout reset, concurrent release, enrollment-token misuse, BEC cooling-off, limit splitting, non-ASCII inputs, secrets in audit) | 34 | 34/34 | n/a | 100% |
 | c) Injection & DoS (SQL into every SQLite field, path traversal, 4 MB body, MIME bombs, 50k-deep JSON, ReDoS, CRLF, RTL override, lone surrogates) | 20 | 20/20 | 5/5 | 100% |
-| d) Detection evasion (homoglyphs, split words, leetspeak, image-only, polite BEC) | 10 | 10/10 | 6/10 | 60% |
-| **Total** | 76 | **76/76** | | **95%** |
+| d) Detection evasion (homoglyphs, split words, leetspeak, image-only, polite BEC) | 14 | 14/14 | 12/14 | 86% |
+| **Total** | 80 | **80/80** | | **98%** |
 
-The 4 misses are all in (d): an image-only lure and three polite BEC mails with no money keywords. They are detection gaps, not breaches, and they feed the self-improvement step below.
+The four original misses in (d) (an image-only lure and three polite BEC mails with no money keywords) now score 51-67 and pass, after the payment-redirection and image-lure rules (below). Four new wordings were then added to check that the rules generalize; two of them miss: a polite payee-detail change from an unknown *company* domain (risk 30, under the 35 threshold) and a first-contact probe that asks for nothing yet (risk 40: flagged at the default threshold, under the payload's bar of 50). They are detection gaps, not breaches, and they feed the self-improvement step below.
+
+### Polite BEC and image-only lures
+
+Polite BEC carries no urgency, secrecy or money keyword, so the rules now look at *what is asked*: a request for action ("could you", "please", "I need you to", "are you at your desk") together with money going somewhere the mail itself names. Four meaning families: buying gift cards / sending their codes, pay or salary into a new account, changing the payment details held for a payee, and paying "to the account below / attached / new account". This is `payment_redirect_request` (weight 0.30; 0.45 when the sender or Reply-To is free mail; 0.10 for an authenticated sender on the trusted-domain list, because colleagues do accounts-payable work). `org_name_in_freemail_address` (0.25) fires when a free-mail address carries our organisation's name (`ap.dept.acme@gmail.com`). The `.eml` parser now counts `<img>` tags (1-2 px tracking pixels and hidden ones excluded), and an HTML body that is only pictures with under 25 words fires `image_lure` (0.20, or 0.35 when the picture is itself a web link). No names, greetings or sample phrases are matched; `tests/test_polite_bec.py` uses paraphrases that appear in no payload, plus ordinary business text that must not fire.
+
+Measured before (`main`) and after, rules mode, threshold 35, commands `python -m phishguard.dataset.evaluate --dataset external --split --fpr-ref easy_ham` and `--n 200 --seed 42`:
+
+| Dataset | Version | Recall | Precision | FPR easy_ham | FPR hard_ham |
+|---|---|---|---|---|---|
+| Real corpus, **test** split | before | 69.6% (2407/3460) | 98.0% | 0.9% (11/1156) | 59.1% (39/66) |
+| Real corpus, **test** split | after | 69.9% (2420/3460) | 98.0% | 0.9% (11/1156) | 59.1% (39/66) |
+| Real corpus, dev split | before | 69.1% (5604/8111) | 97.7% | 0.9% (24/2744) | 59.2% (109/184) |
+| Real corpus, dev split | after | 69.6% (5646/8111) | 97.7% | 0.9% (24/2744) | 59.2% (109/184) |
+| Synthetic (600 mails) | before | 92.0% (BEC 176/200) | 100.0% | 0 false positives | |
+| Synthetic (600 mails) | after | 93.4% (BEC 180/200) | 100.0% | 0 false positives | |
+
+Read it for what it is. The public corpora contain almost no BEC: on the dev split `payment_redirect_request` fired on 3 of 8,111 phishing mails and on no legitimate mail, so the real-corpus gain (+13 test mails, +42 dev) comes from the HTML image-only rule (115 dev phishing mails, 0 dev ham). "No false positives" here means none on 2002-era ham; modern legitimate mail has more picture-only HTML and more payroll/vendor-change requests, and `org_name_in_freemail_address` cannot fire on the corpora at all (no organisation is configured there). The weights are hand-set, not fitted. The red-team payloads and the synthetic set were written by this project, so they show the rules work as designed, not how often real BEC is caught.
 
 ### Vulnerabilities found and fixed
 
@@ -486,8 +503,8 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Payments are simulated (`SimulatedBank`); the ISO 20022, Stripe, Xero, MYOB and identity-provider adapters are documented stubs with no network calls, never tested against a real provider.
 - API keys are shared service keys, not per-user identity; `requested_by` is still caller-supplied.
 - Rate limits and the SQLite store are per process. Multiple workers or hosts need Redis/Postgres.
-- Detection is rule-based with partly hand-set, partly calibrated weights. On real mail (public corpora, test split, weights v3, threshold 35, re-measured 2026-11-13) recall is 69.6% with easy_ham FPR 0.9% and hard_ham FPR 59.1%: three in ten phishing mails are missed and more than half of marketing-like legitimate mail is flagged. Open work on this is listed under Roadmap.
-- Polite BEC with no money keywords and image-only lures are still missed (see red-team report); `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
+- Detection is rule-based with partly hand-set, partly calibrated weights. On real mail (public corpora, test split, weights v3, threshold 35, re-measured 2026-11-13) recall is 69.9% with easy_ham FPR 0.9% and hard_ham FPR 59.1% (69.6% before the polite-BEC and image-lure rules): three in ten phishing mails are missed and more than half of marketing-like legitimate mail is flagged. Open work on this is listed under Roadmap.
+- Polite BEC and image-only lures are covered by rules that have **no real BEC data behind them**: the public corpora hold almost none, so recall on real BEC and the false-positive rate on modern mail are unmeasured. Known misses: a polite payee-detail change from an unknown company domain (risk 30), a first-contact probe with no ask, and any lure whose text is inside an image (there is no OCR; only "picture and almost no text" is detected). `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
 - No real mail, banking or MFA push integrations; money moves only inside the simulated bank. `scripts/check_email.py` and `/analyze/eml` read files you give them; nothing has been run against a live mailbox.
 - **Mailbox connectors were tested only against offline fakes**, written from the providers' public documentation. They have not been run against a real Gmail, Microsoft 365, Outlook.com or IMAP account, so error codes, paging edge cases and provider quirks (consent screens, NetEase/QQ behavior, Graph moves with immutable IDs) are unverified.
 - Gmail OAuth apps in "Testing" status get refresh tokens that expire after 7 days, and `gmail.readonly` is a restricted scope (Google verification is needed to publish). Personal use means re-authorizing weekly; Workspace "Internal" apps or a service account avoid this.
