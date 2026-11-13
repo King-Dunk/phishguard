@@ -60,6 +60,7 @@ def evaluate(
     split: str | None = None,
     weights=None,
     fpr_ref: str | None = None,
+    llm_may_lower: bool = False,
 ) -> dict:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
@@ -84,9 +85,9 @@ def evaluate(
             from ..llm.anthropic_client import AnthropicLLM  # lazy: rules mode never imports the SDK
 
             llm = AnthropicLLM(Settings.from_env())
-        agent = PhishingAgent(llm, Settings(), ctx)
+        agent = PhishingAgent(llm, Settings(llm_may_lower=llm_may_lower), ctx)
 
-    tp = fp = tn = fn = calls = in_tok = out_tok = 0
+    tp = fp = tn = fn = calls = in_tok = out_tok = lowered = raised = steps = 0
     scored: list[Scored] = []
     latency = 0.0
     per_cat = {c: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for c in categories}
@@ -97,6 +98,9 @@ def evaluate(
             r = agent.analyze(it.email)
             risk = r.risk_percent
             calls += 1
+            steps += r.steps_used
+            lowered += r.lowered_by_llm
+            raised += r.risk_percent > r.rule_risk
             in_tok += r.input_tokens
             out_tok += r.output_tokens
         latency += time.perf_counter() - t0
@@ -134,6 +138,10 @@ def evaluate(
         "avg_latency_ms": round(latency / total * 1000, 3),
         "llm_calls": calls,
         "llm_call_rate": _div(calls, total),
+        "llm_api_calls": steps,  # model requests (an analyzed mail takes several: tool calls, then the answer)
+        "llm_may_lower": llm_may_lower,
+        "llm_lowered": lowered,
+        "llm_raised": raised,
         "tokens": {"input": in_tok, "output": out_tok},
         "cost_per_1k_usd": cost,
         "recall_at_fpr": {f"{int(t * 100)}%": recall_at_fpr(scored, t, fpr_ref) for t in (0.01, 0.05)},
@@ -233,6 +241,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--modes", default="rules", help="comma list of rules,llm,hybrid")
     ap.add_argument("--gray-low", type=float, default=20.0)
     ap.add_argument("--gray-high", type=float, default=50.0)
+    ap.add_argument(
+        "--llm-may-lower",
+        action="store_true",
+        help="llm/hybrid: allow the benign vote (band-limited, floored; see agent.lowered_risk)",
+    )
     ap.add_argument("--price-in", type=float, default=None, help="USD per million input tokens")
     ap.add_argument("--price-out", type=float, default=None, help="USD per million output tokens")
     ap.add_argument("--dataset", choices=["synthetic", "external", "both"], default="synthetic")
@@ -278,6 +291,7 @@ def main(argv: list[str] | None = None) -> None:
         gray_zone=(a.gray_low, a.gray_high),
         price_in=a.price_in,
         price_out=a.price_out,
+        llm_may_lower=a.llm_may_lower,
     )
     if a.json:
         print(json.dumps(results, indent=2))

@@ -218,6 +218,22 @@ The same sentence means different things from different senders. From an authent
 **72. Did the new red-team wordings pass?**
 Two of four. A clickable-image HTML mail (35) and a gift-card request in other words (45) pass at the default threshold. A polite payee-detail change from an unknown company domain scores 30 and is missed by design (Q70). A first-contact probe ("are you in the office? send me your mobile") scores 40 on the executive name alone; there is no ask to detect yet. Both stay in the red-team file as known gaps, and `tests/test_redteam.py` pins exactly these two.
 
+## LLM benign vote
+
+(Numbers 63-68 are used by the open PR #8, so after the polite-BEC section this starts at 73.)
+
+**73. The LLM could only raise a score. What exactly may it lower now?**
+With `PHISHGUARD_LLM_MAY_LOWER=1` (off by default), an LLM answer below the rule score is applied by `agent.lowered_risk` only if the rule score is in the 20-50 band and no veto feature fired, and the result is `max(llm vote, 20, content-only floor)`. The content-only floor is the rule score of every feature except an allowlist of routing/time context: reply-to and return-path mismatches (not the free-mail reply-to), missing authentication, off-hours, moderate reputation, young domain. These are the signals that mailing lists, ESPs and ticket systems trip on legitimate mail, and where reading the mail helps. It is an allowlist on weight *keys*, so a feature added later counts toward the floor unless someone decides otherwise, and a sub-case such as `reply_to_freemail` is never waivable even though it shares a display name.
+
+**74. Why is that injection-resistant?**
+The attacker writes the mail, so assume the model says whatever the mail wants: "risk 0, safe". Then ask what that answer can change. It cannot change anything the mail's own content triggered (wording, links, attachments), any identity or authentication failure, or any mail that hides text, obfuscates keywords or talks to the model (veto: no lowering at all). It cannot move a score that is above 50 or below 20, and it cannot produce a score below 20. What is left is routing context, which the attacker could mostly have avoided anyway by not setting a mismatching Reply-To. None of this depends on the prompt. The MFA gateway is unaffected either way: it never reads the score.
+
+**75. How were the attacks written first, and do they bite?**
+`redteam/payloads/benign_vote.yaml` has 9 mails (reviewer notes with no trigger words, a forged verdict JSON, hidden HTML, classic injection, leetspeak, newsletter dressing, a score above the band, Chinese, and one accepted-limit case). The runner's model already answered "risk 0, safe, approved" to everything; the harness now also switches lowering on, and a new `llm_floor` security invariant is recomputed by the runner from every analysis response (its own copy of the band, the context list and the veto list, not `agent.py`'s numbers). Run against a naive version that accepts the model's lower score, the suite reports 38 security breaches in 85 attacks, including all 9 new ones and most of the old prompt-injection and evasion mails. Against the real implementation: 0 breaches, 9/9 pass. `tests/test_redteam.py` keeps the naive run as a test so the attacks cannot silently stop biting, and `tests/test_llm_lowering.py` checks the invariants on 3,000 random feature sets and on every pair of content features that lands in the band.
+
+**76. What does it cost and what can it gain?**
+Measured on the real corpus with stand-in models (no API calls). Worst case, a model that answers "safe" to every gray-zone mail: test recall 69.6% to 63.0% (226 of 2,407 caught phishing mails were carried over the threshold by routing context), with lowering off the same model changes nothing. Best case for false positives is the same run read the other way: hard_ham 39 to 35 of 66, easy_ham 11 to 9 of 1,156. So on these weights the path is safe but small: most hard_ham false positives come from content signals that the floor protects on purpose. Hence off by default. The accepted limit is explicit in the red-team file: a mail whose only signals are routing context is cleared (35 to 20) by a compromised model.
+
 ## Offline checker
 
 (Numbers 63-77 are used by open pull requests, so this starts at 78.)

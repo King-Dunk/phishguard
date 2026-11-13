@@ -102,6 +102,11 @@ def _result(email_id: str, r: AnalysisResult, threshold: float) -> dict[str, Any
         "tokens_used": r.tokens_used,
         "circuit_break": r.circuit_break,
         "rationale": r.rationale,
+        # audit trail for the benign-vote path: what the rules said, what the model said, what was applied
+        "rule_risk": r.rule_risk,
+        "llm_risk": r.llm_risk,
+        "content_floor": r.content_floor,
+        "lowered_by_llm": r.lowered_by_llm,
     }
 
 

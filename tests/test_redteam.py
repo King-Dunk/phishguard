@@ -24,7 +24,7 @@ def results():
 
 def test_payload_library_covers_all_categories():
     cats = {a["category"] for a in runner.load_payloads()}
-    assert cats == {"prompt_injection", "privilege", "injection", "evasion"}
+    assert cats == {"prompt_injection", "privilege", "injection", "evasion", "benign_vote"}
     assert len(runner.load_payloads()) >= 50
 
 
@@ -181,3 +181,18 @@ def test_long_hosts_stay_cheap():
     for _ in range(100):
         lookalike_of("a" * 200000 + ".com", ("acme-corp.com",))
     assert time.perf_counter() - t < 1.0
+
+
+def test_benign_vote_attacks_catch_a_naive_implementation(monkeypatch):
+    """The attacks were written before the lowering path. Against a version that simply accepts the
+    model's lower score, every one of them breaks the llm_floor security invariant."""
+    import phishguard.agent as agent
+
+    payloads = [a for a in runner.load_payloads() if a["category"] == "benign_vote"]
+    assert len(payloads) >= 9
+    monkeypatch.setattr(agent, "lowered_risk", lambda base, llm, feats, s: llm)
+    naive = runner.run(payloads=payloads)
+    assert all(not r["security_ok"] and "llm_floor" in r["failed_checks"] for r in naive)
+    monkeypatch.undo()
+    real = runner.run(payloads=payloads)
+    assert all(r["passed"] for r in real), [(r["id"], r["failed_checks"]) for r in real if not r["passed"]]
