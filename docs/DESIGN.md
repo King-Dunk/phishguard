@@ -201,3 +201,11 @@ The executor used to append to a list. Now it talks only to `PaymentProvider` / 
 
 **62. Why keep the single-factor flow at all?**
 Other tests and local experiments rely on it, and it is useful for checking the state machine without enrolling four factors. It is fenced: `MFAPolicy(required=1)` raises unless `dev_single_factor=True`, which comes only from `PHISHGUARD_MFA_DEV_SINGLE_FACTOR=1`. In that mode `/mfa/factor` and `/mfa/challenge` refuse to run, so the two flows can't be mixed. It is the only mode in which a console code exists.
+
+## Offline checker
+
+(Numbers 63-77 are used by open pull requests, so this starts at 78.)
+
+**78. Why a separate `scripts/check_email.py` when the API already has `/analyze/eml`?**
+To look at one saved mail you should not need API keys, a port and a JSON body. The script calls the same `parse_eml`, `PhishingAgent.analyze` and result builder as the route, with the same `Settings.from_env()`, so a score from the script and a score from the API are the same number for the same settings. It runs the mock model by default, so nothing leaves the machine. It never creates a gateway, an executor or a store and calls no action: it reads files and prints. One wart: it takes two helpers from `phishguard.api`, and importing that module loads the `mutating` package, so the import-level isolation that the tests prove for `readonly/`, `llm/` and `agent.py` (Q2) does not hold for this script's process. Moving the two helpers out of `api.py` would fix that. What it skips are the API's request limits (body cap, rate limit, key check); the parser's own 2 MB and MIME-complexity limits still apply, and a rejected file is reported without stopping the run.
+

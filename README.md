@@ -175,12 +175,25 @@ Real output of `bash examples/run_demo.sh` (MockLLM, API key auth on, SQLite per
 ```bash
 pip install -r requirements.txt
 python -m pytest                                          # MockLLM only, no network
+python scripts/check_email.py tests/fixtures/             # score saved .eml files, no server needed
 python -m phishguard.dataset.evaluate --n 200 --seed 42   # rules-mode comparison table
 python scripts/calibrate.py --help                        # real-corpus weight calibration (dev split only)
 PHISHGUARD_API_KEYS=dev-key uvicorn phishguard.api:get_app --factory --port 8000
 bash examples/run_demo.sh                                 # end-to-end demo
 docker build -t phishguard . && docker run -p 8000:8000 -e PHISHGUARD_API_KEYS=change-me phishguard  # non-root
 ```
+
+### Check a saved email (no server)
+
+`scripts/check_email.py` scores `.eml` files in-process. It uses the same parser, agent and result format as `POST /analyze/eml`, and the same `PHISHGUARD_*` settings (`PHISHGUARD_THRESHOLD`, `PHISHGUARD_TRUSTED_DOMAINS`, `PHISHGUARD_EXECUTIVES`, `PHISHGUARD_AUTHSERV_ID`; `PHISHGUARD_LLM_MODE=mock` by default, so nothing leaves the machine).
+
+```bash
+python scripts/check_email.py mail.eml                    # one file: sender, subject, risk, verdict, top reasons
+python scripts/check_email.py inbox_export/               # every .eml in a folder
+python scripts/check_email.py mail.eml --json             # the full API-style JSON result
+```
+
+Each mail prints its risk, the threshold, the verdict and up to eight scoring reasons with their points; the last line counts the flagged mails (on the ten test fixtures: `7/10 flagged as phishing (mode: mock)`). A file the parser refuses (too large, too many MIME parts) is reported as rejected and the run continues. Exit code 2 means no `.eml` file was found. It only reads: there is no mailbox access and no remediation here (that is `scripts/scan_mailbox.py`, see "Mailbox connectors").
 
 | Env var | Default | Meaning |
 |---|---|---|
@@ -473,9 +486,9 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Payments are simulated (`SimulatedBank`); the ISO 20022, Stripe, Xero, MYOB and identity-provider adapters are documented stubs with no network calls, never tested against a real provider.
 - API keys are shared service keys, not per-user identity; `requested_by` is still caller-supplied.
 - Rate limits and the SQLite store are per process. Multiple workers or hosts need Redis/Postgres.
-- Detection is rule-based with hand-set weights; real-LLM behavior is unmeasured. On real mail, recall at the default threshold is 60.8% with hard_ham FPR 56.1% (test split, local run).
+- Detection is rule-based with partly hand-set, partly calibrated weights. On real mail (public corpora, test split, weights v3, threshold 35, re-measured 2026-11-13) recall is 69.6% with easy_ham FPR 0.9% and hard_ham FPR 59.1%: three in ten phishing mails are missed and more than half of marketing-like legitimate mail is flagged. Open work on this is listed under Roadmap.
 - Polite BEC with no money keywords and image-only lures are still missed (see red-team report); `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
-- No real mail, banking or MFA push integrations; money moves only inside the simulated bank.
+- No real mail, banking or MFA push integrations; money moves only inside the simulated bank. `scripts/check_email.py` and `/analyze/eml` read files you give them; nothing has been run against a live mailbox.
 - **Mailbox connectors were tested only against offline fakes**, written from the providers' public documentation. They have not been run against a real Gmail, Microsoft 365, Outlook.com or IMAP account, so error codes, paging edge cases and provider quirks (consent screens, NetEase/QQ behavior, Graph moves with immutable IDs) are unverified.
 - Gmail OAuth apps in "Testing" status get refresh tokens that expire after 7 days, and `gmail.readonly` is a restricted scope (Google verification is needed to publish). Personal use means re-authorizing weekly; Workspace "Internal" apps or a service account avoid this.
 - IMAP has no read-only credential: an app password can do anything. Read-only scanning is enforced in code (`EXAMINE`, `BODY.PEEK[]`, tests), not by the provider.
@@ -484,6 +497,24 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Held mailbox actions (delete, release, bulk) need two factors, but only the process that created them can approve them: the API loads pending actions from SQLite at startup and has no remediation credentials, and `mailbox_guard` has no approval interface yet. Until a shared approval service exists they expire unless approved programmatically.
 
 ## Roadmap
+
+**In review (open pull requests, not on `main` yet; the numbers in each are measured on the public corpora, test split):**
+
+- #8: fewer false positives (weights v4; hard_ham FPR 59.1% to 25.8%).
+- #10: polite BEC (payment-redirection requests) and HTML image-only lures.
+- #11: opt-in LLM "benign vote" that can lower a score only inside 20-50 and never below a content-only floor, with red-team attacks written first.
+- #12 (stacked on #11): first hybrid run on real mail with the real model, on a 121-mail gray-zone sample under a 400-request budget.
+- #5 is superseded by #6 (merged) and is left open only for reference.
+
+**Still open, and not doable without real accounts, hardware or providers:**
+
+- Mailbox connectors against real Gmail, Microsoft 365 / Outlook.com and IMAP accounts (so far only offline fakes).
+- Passkeys on physical authenticators (Touch ID, Windows Hello, a FIDO2 key); so far a software authenticator and Chromium's virtual one.
+- A real payment adapter (bank ISO 20022 sandbox, Stripe test mode, Xero); so far `SimulatedBank` and documented stubs.
+- KMS / envelope encryption for TOTP secrets (stored unencrypted in SQLite today).
+
+**Further out:**
+
 
 - Run the mutating side as a separate service with mTLS and its own credentials.
 - Shared store (Postgres/Redis) for multi-instance deployments; KMS-encrypted TOTP secrets and password hashes with a pepper; per-action locks instead of one gateway lock.
