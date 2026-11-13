@@ -202,9 +202,25 @@ The executor used to append to a list. Now it talks only to `PaymentProvider` / 
 **62. Why keep the single-factor flow at all?**
 Other tests and local experiments rely on it, and it is useful for checking the state machine without enrolling four factors. It is fenced: `MFAPolicy(required=1)` raises unless `dev_single_factor=True`, which comes only from `PHISHGUARD_MFA_DEV_SINGLE_FACTOR=1`. In that mode `/mfa/factor` and `/mfa/challenge` refuse to run, so the two flows can't be mixed. It is the only mode in which a console code exists.
 
+## Polite BEC and image-only lures
+
+(Numbers 63-68 are used by the open false-positive PR #8, so this section starts at 69.)
+
+**69. Why a "payment redirection" rule instead of the phrases `redteam/improve.py` proposed?**
+The proposal (`proposals/20261103.md`) listed phrases found in misses and in no legitimate sample: "hi it's", "it's david", "quick favour", "between us". Those are the synthetic generator's greeting and the executives' first names; a rule on them would score the dataset, not BEC. What every BEC mail must contain, however polite, is a request for action and money going somewhere new. So `payment_redirect_request` needs a request marker plus one of four meaning families (gift cards and their codes; pay or salary into a new account; a change to the payment details held for a payee; payment "to the account below / attached / new account"). "Update *your* account details" is excluded on purpose: that is credential phishing and already has its own signal. `tests/test_polite_bec.py` checks paraphrases that appear in no payload, a list of ordinary business sentences that must not fire, and that the proposal's phrases alone do nothing.
+
+**70. Why three weights for it?**
+The same sentence means different things from different senders. From an authenticated sender on the trusted-domain list it is normal accounts-payable work (0.10, the same reasoning as the keyword damping in Q42, and the same cost: a compromised internal mailbox is not caught by wording). From an unknown domain it is 0.30, which alone stays under the threshold of 35: a real supplier may write this, and the control that matters is the MFA gateway and the payee cooling-off, not the score. From free mail (sender or Reply-To) it is 0.45, enough to flag alone. `org_name_in_freemail_address` (0.25) adds the case of a free-mail address carrying our name. All are hand-set. Limit: the public corpora have almost no BEC (the rule fired on 3 of 8,111 dev phishing mails and 0 of 2,928 dev legitimate mails), so neither recall on real BEC nor the false-positive rate on modern business mail is measured.
+
+**71. What changed for image-only lures, and what is still missing?**
+`image_lure` only looked at image *attachments*. The parser now counts `<img>` tags in the HTML body, skipping 1-2 px tracking pixels and CSS-hidden ones, and records how many sit inside a web link. A body with pictures, under 25 words and no other attachment fires `image_lure` under key `image_lure_inline` (0.20) or `image_lure_linked` (0.35). On the dev split this fired on 115 phishing mails and no legitimate mail; on the test split recall went from 69.6% to 69.9% with both false-positive rates unchanged. The ham is from 2002, when picture-only HTML mail was rare, so the zero is weak evidence for modern mail. There is no OCR: the text inside the picture is never read.
+
+**72. Did the new red-team wordings pass?**
+Two of four. A clickable-image HTML mail (35) and a gift-card request in other words (45) pass at the default threshold. A polite payee-detail change from an unknown company domain scores 30 and is missed by design (Q70). A first-contact probe ("are you in the office? send me your mobile") scores 40 on the executive name alone; there is no ask to detect yet. Both stay in the red-team file as known gaps, and `tests/test_redteam.py` pins exactly these two.
+
 ## LLM benign vote
 
-(Numbers 63-68 are used by the open PR #8 and 69-72 by the polite-BEC PR, so this section starts at 73.)
+(Numbers 63-68 are used by the open PR #8, so after the polite-BEC section this starts at 73.)
 
 **73. The LLM could only raise a score. What exactly may it lower now?**
 With `PHISHGUARD_LLM_MAY_LOWER=1` (off by default), an LLM answer below the rule score is applied by `agent.lowered_risk` only if the rule score is in the 20-50 band and no veto feature fired, and the result is `max(llm vote, 20, content-only floor)`. The content-only floor is the rule score of every feature except an allowlist of routing/time context: reply-to and return-path mismatches (not the free-mail reply-to), missing authentication, off-hours, moderate reputation, young domain. These are the signals that mailing lists, ESPs and ticket systems trip on legitimate mail, and where reading the mail helps. It is an allowlist on weight *keys*, so a feature added later counts toward the floor unless someone decides otherwise, and a sub-case such as `reply_to_freemail` is never waivable even though it shares a display name.
@@ -220,4 +236,11 @@ Measured on the real corpus with stand-in models (no API calls). Worst case, a m
 
 **77. What did the first real-model run show, and how was the budget kept?**
 One run on the real-corpus test split with `claude-haiku-5-5`, capped at 400 model requests. `evaluate.py` got three things for this: `--max-llm-api-calls` (a wrapper that counts every request before it is sent and refuses the next one at the cap, with SDK retries off so one call is one request), `--llm-sample` (per category, the gray-zone mails with the smallest content hashes, fixed before any model call) and a table of rules vs hybrid on exactly the mails the model saw. 371 requests were used in total. On 121 reviewed gray-zone mails: the model scored 58 of 59 phishing mails at or above the threshold and none of 60 legitimate ones; raise-only hybrid recovered all 13 rule misses among 60 phishing mails; the benign vote lowered 6 of 29 flagged legitimate mails under the threshold, the content-only floor or a veto held 22 of the other 23 (one got no parseable answer) as well as the one phishing mail the model got wrong. About 3 requests, 6 seconds and $0.00087 per reviewed mail. What it does not show: whole-split recall for hybrid (60 of 1,244 gray-zone phishing mails were reviewed), anything about modern mail, or how the model behaves on mail written to attack it; the red-team suite covers the last point with a compromised stand-in, not with the real model. The per-mail scores are in `docs/hybrid_real_run_20261113.json`.
+
+## Offline checker
+
+(Numbers 63-77 are used by open pull requests, so this starts at 78.)
+
+**78. Why a separate `scripts/check_email.py` when the API already has `/analyze/eml`?**
+To look at one saved mail you should not need API keys, a port and a JSON body. The script calls the same `parse_eml`, `PhishingAgent.analyze` and result builder as the route, with the same `Settings.from_env()`, so a score from the script and a score from the API are the same number for the same settings. It runs the mock model by default, so nothing leaves the machine. It never creates a gateway, an executor or a store and calls no action: it reads files and prints. One wart: it takes two helpers from `phishguard.api`, and importing that module loads the `mutating` package, so the import-level isolation that the tests prove for `readonly/`, `llm/` and `agent.py` (Q2) does not hold for this script's process. Moving the two helpers out of `api.py` would fix that. What it skips are the API's request limits (body cap, rate limit, key check); the parser's own 2 MB and MIME-complexity limits still apply, and a rejected file is reported without stopping the run.
 

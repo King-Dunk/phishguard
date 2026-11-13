@@ -90,6 +90,8 @@ class _HTMLText(HTMLParser):
         self.text: list[str] = []
         self.hidden: list[str] = []
         self.links: list[DisplayedLink] = []
+        self.images = 0  # visible <img>, not counting 1-2 px tracking pixels
+        self.linked_images = 0  # of those, inside an <a href="http...">
         self._href: str | None = None
         self._anchor: list[str] = []
         self._skip = 0
@@ -107,6 +109,10 @@ class _HTMLText(HTMLParser):
             self._anchor = []
         elif tag in ("br", "p", "div", "tr"):
             self.text.append("\n")
+        elif tag == "img" and not self._skip and not _tiny(a) and not any(h for _, h in self._stack):
+            self.images += 1
+            if self._href is not None and self._href.lower().startswith(("http://", "https://")):
+                self.linked_images += 1
 
     def handle_endtag(self, tag):
         for i in range(len(self._stack) - 1, -1, -1):
@@ -129,6 +135,15 @@ class _HTMLText(HTMLParser):
         self.text.append(data)
         if self._href is not None:
             self._anchor.append(data)
+
+
+def _tiny(attrs: dict) -> bool:
+    """1-2 px images are tracking pixels / spacers, not content the reader is meant to look at."""
+    for k in ("width", "height"):
+        v = str(attrs.get(k) or "").strip().lower().removesuffix("px")
+        if v.isdigit() and int(v) <= 2:
+            return True
+    return False
 
 
 def parse_auth_results(msg: StdMessage, trusted_authserv_id: str | None = None) -> dict[str, str]:
@@ -192,6 +207,7 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
     hidden: list[str] = []
     pairs: list[DisplayedLink] = []
     atts: list[Attachment] = []
+    images = linked_images = 0
     for part in msg.walk():
         if part.is_multipart():
             continue
@@ -215,6 +231,8 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
             html_text.append("".join(p.text))
             hidden.append(" ".join(p.hidden))
             pairs.extend(p.links)
+            images += p.images
+            linked_images += p.linked_images
 
     body = "\n".join(plain) if plain else "\n".join(html_text)
     if plain and html_text:
@@ -252,4 +270,6 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
         hidden_text=" ".join(" ".join(hidden).split())[:5000],
         header_anomalies=[a[:200] for a in _header_anomalies(msg)][:10],
         list_mail=is_list_mail(msg),
+        inline_images=min(images, 10000),
+        linked_images=min(linked_images, 10000),
     )
