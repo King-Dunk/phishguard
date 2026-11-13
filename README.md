@@ -334,8 +334,8 @@ Measured on this repo (600 synthetic mails, threshold 35):
 | Mode | Accuracy | Precision | Recall | F1 | Avg latency | LLM call rate | Cost / 1k emails |
 |---|---|---|---|---|---|---|---|
 | rules | 97.8% | 100.0% | 95.7% | 97.8% | ~0.26 ms | 0% | $0 |
-| llm | not run: no `ANTHROPIC_API_KEY` was available | | | | | 100% | |
-| hybrid | not run: no `ANTHROPIC_API_KEY` was available | | | | | | |
+| llm | not run on the synthetic set | | | | | 100% | |
+| hybrid | not run on the synthetic set; measured with the real model on a real-mail sample instead, see "Hybrid on real mail" | | | | | | |
 
 Confusion for rules: TP 288, FP 0, TN 299, FN 13 (BEC recall 93.5%, payment chasing 100%). Latency depends on the machine. Besides the table, `evaluate.py` reports recall at a fixed 1% and 5% false-positive rate (`--fpr-ref easy_ham` to measure FPR on one category) and, with `--sweep`, every threshold from 30 to 60 in steps of 5.
 
@@ -418,7 +418,56 @@ What a fully injected model could do, and the most a perfect model could gain, m
 | dev | rules | 69.1% (5604/8111) | 0.9% (24/2744) | 59.2% (109/184) | | |
 | dev | hybrid, always-"safe" model, lowering **on** | 63.1% (5121/8111) | 0.7% (20/2744) | 55.4% (102/184) | 3113 | 2742 |
 
-Two things follow. The worst case is bounded but not small: an attacker who fully controls the model's answer on every mail takes 6.5 points of recall on the test split (226 phishing mails that were flagged mainly by routing context). And the best case is modest: even a model that correctly calls every legitimate mail benign can clear at most 4 of the 39 flagged hard_ham test mails (59.1% to 53.0%), because most hard_ham false positives on these weights come from content signals, which the floor protects. That is why the switch is off by default. These are stand-in models; no real-model numbers are part of this change.
+Two things follow. The worst case is bounded but not small: an attacker who fully controls the model's answer on every mail takes 6.5 points of recall on the test split (226 phishing mails that were flagged mainly by routing context). And the best case is modest: even a model that correctly calls every legitimate mail benign can clear at most 4 of the 39 flagged hard_ham test mails (59.1% to 53.0%), because most hard_ham false positives on these weights come from content signals, which the floor protects. That is why the switch is off by default. Those rows use stand-in models; the real model is next.
+
+### Hybrid on real mail (real model, sampled)
+
+**What was run (2026-11-13):** `python -m phishguard.dataset.evaluate --dataset external --split --split-part test --modes rules,hybrid --llm-may-lower --llm-sample "hard_ham=31,easy_ham=30,nazario_phish=60" --max-llm-api-calls 390 --fpr-ref easy_ham --price-in 0.10 --price-out 0.50`, model `claude-haiku-5-5`, weights v3, threshold 35, gray zone 20-50. Raw per-mail scores (no content) are in `docs/hybrid_real_run_20261113.json`.
+
+**This is a sample, not the whole split.** The run had a hard budget of 400 model requests, and one mail takes about three (two tool calls, then the answer). The test split has 1,349 gray-zone mails (74 easy_ham, 31 hard_ham, 1,244 phishing). The model saw 121 of them, chosen by content hash before any model call: **all 31** hard_ham, 30 of 74 easy_ham, 60 of 1,244 phishing. 365 requests were used, plus 6 in a two-mail smoke test: 371 in total.
+
+On the 121 mails the model reviewed (same mails under each scoring, threshold 35):
+
+| Category (reviewed) | Scoring | Flagged | Not flagged |
+|---|---|---|---|
+| nazario_phish (60) | rules | 47 | 13 missed |
+| nazario_phish (60) | hybrid, raise only (default) | 60 | 0 missed |
+| nazario_phish (60) | hybrid with benign vote | 60 | 0 missed |
+| hard_ham (31) | rules | 24 false positives | 7 |
+| hard_ham (31) | hybrid, raise only (default) | 24 false positives | 7 |
+| hard_ham (31) | hybrid with benign vote | 20 false positives | 11 |
+| easy_ham (30) | rules | 5 false positives | 25 |
+| easy_ham (30) | hybrid, raise only (default) | 5 false positives | 25 |
+| easy_ham (30) | hybrid with benign vote | 3 false positives | 27 |
+
+| Measured on the 121 reviewed mails | Value |
+|---|---|
+| Recall on reviewed phishing | rules 78.3% (47/60), hybrid 100% (60/60) |
+| Precision on reviewed mails | rules 61.8% (47/76), hybrid raise-only 67.4% (60/89), hybrid with benign vote 72.3% (60/83) |
+| Model's own score, where it gave one (119 mails) | 58 of 59 phishing at or above 35; 0 of 60 legitimate at or above 35 |
+| No parseable answer / circuit breaker | 2 mails / 1 mail (rule score kept) |
+| Scores lowered / raised by the model | 57 / 59 (most lowered scores were already under 35 or stayed above it) |
+| Model requests per mail | 3.02 |
+| Latency per reviewed mail | mean 6.27 s, median 5.94 s, max 14.37 s (rules alone: 0.81 ms per mail in the same run) |
+| Tokens | 568,885 input, 95,934 output |
+| Cost | $0.1049 for 121 mails ($0.00087 per reviewed mail), from the API's reported token usage at the list price of $0.10 / $0.50 per million tokens. Smoke test: $0.0020. Not taken from a billing statement. |
+
+Whole test split (4,682 mails), where hybrid means "the model reviewed only the 121 sampled gray-zone mails":
+
+| Real corpus, **test split** | Recall | Precision | FPR easy_ham | FPR hard_ham |
+|---|---|---|---|---|
+| rules | 69.6% (2407/3460) | 98.0% | 0.9% (11/1156) | 59.1% (39/66) |
+| hybrid with benign vote, **sampled** | 69.9% (2420/3460) | 98.2% | 0.8% (9/1156) | 53.0% (35/66) |
+
+Only the hard_ham figure in that last row is complete, because every gray-zone hard_ham mail was reviewed. Recall and easy_ham FPR are understated: 1,184 gray-zone phishing mails and 44 gray-zone easy_ham mails were never shown to the model and kept their rule score. Nothing here is extrapolated to them.
+
+What it says:
+
+- **Raise-only hybrid works on the sample.** All 13 missed phishing mails among the 60 reviewed were recovered, with no new false positive.
+- **The model separated the classes almost perfectly on these 119 answered mails** (one phishing mail scored under 35, no legitimate mail scored 35 or more). That is a small sample from one corpus, and hard_ham is 31 mails.
+- **The benign vote cleared few false positives, and the floor is why.** The model voted benign on every legitimate mail it answered for, but only 6 of the 29 flagged ones could be lowered (hard_ham 24 to 20, easy_ham 5 to 3). Of the other 23, 22 were held by the content-only floor or a veto and one got no parseable answer. The one phishing mail the model scored under 35 was also held, by the same rule. hard_ham FPR on the test split goes from 59.1% to 53.0%, exactly the ceiling the stand-in run predicted.
+- **Cost and latency.** About $0.00087 and 6 seconds per reviewed mail. 28.8% of the test split (1,349 of 4,682) falls in the gray zone; a real inbox has a different mix.
+- The floor that blocks 22 correct benign votes is the same floor that bounds an injected model at 6.5 points of recall. Loosening it is a trade, not a fix, and needs the same two measurements first.
 
 ### Evaluation pitfalls
 
@@ -529,7 +578,7 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Payments are simulated (`SimulatedBank`); the ISO 20022, Stripe, Xero, MYOB and identity-provider adapters are documented stubs with no network calls, never tested against a real provider.
 - API keys are shared service keys, not per-user identity; `requested_by` is still caller-supplied.
 - Rate limits and the SQLite store are per process. Multiple workers or hosts need Redis/Postgres.
-- Detection is rule-based with partly hand-set, partly calibrated weights. On real mail (public corpora, test split, weights v3, threshold 35, re-measured 2026-11-13) recall is 69.9% with easy_ham FPR 0.9% and hard_ham FPR 59.1% (69.6% before the polite-BEC and image-lure rules): three in ten phishing mails are missed and more than half of marketing-like legitimate mail is flagged. Open work on this is listed under Roadmap.
+- Detection is rule-based with partly hand-set, partly calibrated weights. On real mail (public corpora, test split, weights v3, threshold 35, re-measured 2026-11-13) recall is 69.9% with easy_ham FPR 0.9% and hard_ham FPR 59.1% (69.6% before the polite-BEC and image-lure rules): three in ten phishing mails are missed and more than half of marketing-like legitimate mail is flagged. Open work on this is listed under Roadmap. The real model was measured once, on a 121-mail gray-zone sample (see "Hybrid on real mail"): too small to quote a whole-split recall for hybrid, one model, one corpus, 2002-era ham. `llm` mode (model on every mail) and the synthetic set were not run with the real model.
 - Polite BEC and image-only lures are covered by rules that have **no real BEC data behind them**: the public corpora hold almost none, so recall on real BEC and the false-positive rate on modern mail are unmeasured. Known misses: a polite payee-detail change from an unknown company domain (risk 30), a first-contact probe with no ask, and any lure whose text is inside an image (there is no OCR; only "picture and almost no text" is detected). `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
 - No real mail, banking or MFA push integrations; money moves only inside the simulated bank. `scripts/check_email.py` and `/analyze/eml` read files you give them; nothing has been run against a live mailbox.
 - **Mailbox connectors were tested only against offline fakes**, written from the providers' public documentation. They have not been run against a real Gmail, Microsoft 365, Outlook.com or IMAP account, so error codes, paging edge cases and provider quirks (consent screens, NetEase/QQ behavior, Graph moves with immutable IDs) are unverified.
@@ -564,7 +613,7 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Test passkeys on real devices (Touch ID, Windows Hello, a FIDO2 key) and add attestation checks for managed devices; factor recovery and admin reset flows with their own audit trail.
 - Implement one real payment adapter against a provider sandbox (Stripe test mode or a bank's ISO 20022 sandbox), with Confirmation-of-Payee style name checks on bank-detail changes.
 - Bind approvers to SSO identity, and require a *different* person to approve payments above a threshold (dual control).
-- **Hybrid on real mail (next step).** Call the LLM only when the rule score is in the gray zone 20-50 (now the default for `--modes hybrid`). That band holds both the missed phishing at threshold 35 and most of the flagged hard_ham, so it's where an LLM's reading of intent can add separation, and clear-cut mail stays free. Plan: run `--dataset external --split --modes rules,hybrid` locally and compare recall at 1% easy_ham FPR and hard_ham FPR against the rules row. The lowering path now exists (opt-in `PHISHGUARD_LLM_MAY_LOWER=1`: benign votes count only within 20-50, never below the content-only floor, red-team attacks written first; see "LLM benign vote"). Stand-in models bound it on the real test split: at most 4 of 39 flagged hard_ham mails can be cleared, and a fully injected model costs 6.5 points of recall. Next: decide whether a wider floor (e.g. letting a vote discount generic urgency/payment wording on list mail) is worth the larger injection exposure, with the same bound measured first.
+- **Hybrid on real mail.** Done once on a sample ("Hybrid on real mail"): raise-only hybrid recovered 13 of 13 missed phishing mails among 60 reviewed; the opt-in benign vote took hard_ham FPR from 59.1% to 53.0% on the test split. Next: run the full gray zone of the test split (1,349 mails; this run used 3.02 model requests per mail) to get whole-split recall and easy_ham FPR for hybrid; cut requests per mail (the agent spends two tool calls before answering); measure with the v4 weights of PR #8, where far fewer hard_ham mails are flagged to begin with; and decide on the floor only after measuring both the gain and the injected-model bound for any wider variant.
 - Calibrate on a modern legitimate-mail corpus, so era artifacts stop mattering.
 - Mailbox connectors: run against real Gmail, Microsoft 365, Outlook.com and a few IMAP providers (iCloud, Fastmail, QQ, 163) and fix whatever the fakes got wrong; add certificate credentials for Graph app-only auth; a shared checkpoint store for several workers; per-mailbox rate budgets for large tenants.
 

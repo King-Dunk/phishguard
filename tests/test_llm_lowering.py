@@ -210,3 +210,71 @@ def test_evaluate_flag_and_counters():
 def test_rule_score_helper_matches_agent():
     e = make_email(**CONTENT)
     assert run(e).rule_risk == analyze_email(e)[0]
+
+
+# --- budgeted real-model runs (stand-in models; no network) ---------------------------------------
+def test_call_budget_is_hard_and_counts_failures():
+    from phishguard.dataset.evaluate import BudgetedLLM, LLMBudgetExhausted
+
+    class Boom(LLMClient):
+        def complete(self, **kw):
+            raise RuntimeError("api down")
+
+    b = BudgetedLLM(Boom(), 2)
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            b.complete(system="", messages=[], tools=[], max_tokens=1)
+    with pytest.raises(LLMBudgetExhausted):
+        b.complete(system="", messages=[], tools=[], max_tokens=1)
+    assert b.calls == 2  # the request over budget was never made
+
+
+def test_evaluate_stops_calling_the_model_at_the_budget():
+    full = evaluate(30, seed=3, mode="hybrid", llm=Says())
+    assert full["llm_calls"] > 3 and full["llm_skipped_budget"] == 0
+    cut = evaluate(30, seed=3, mode="hybrid", llm=Says(), max_llm_api_calls=3)
+    assert cut["llm_api_calls_attempted"] == 3 == cut["llm_calls"]
+    assert cut["llm_skipped_budget"] == full["llm_calls"] - 3
+    assert cut["llm_reviewed"]["mails"] == 3
+
+
+def test_api_errors_keep_the_rule_score_and_are_reported():
+    class Boom(LLMClient):
+        def complete(self, **kw):
+            raise RuntimeError("api down")
+
+    r = evaluate(30, seed=3, mode="hybrid", llm=Boom(), llm_may_lower=True)
+    assert r["llm_errors"] > 0 and r["llm_calls"] == 0 and "api down" in r["llm_first_error"]
+    assert r["confusion"] == evaluate(30, seed=3, mode="rules")["confusion"]
+
+
+def test_sample_is_fixed_per_category_and_reviewed_block_compares_same_mails():
+    kw = dict(n_per_category=30, seed=3, mode="hybrid", llm_may_lower=True)
+    a = evaluate(llm=Says(), llm_sample={"bec": 2, "payment_chasing": 1}, **kw)
+    b = evaluate(llm=Says(), llm_sample={"bec": 2, "payment_chasing": 1}, **kw)
+    rv = a["llm_reviewed"]
+    assert rv["mails"] == 3 == a["llm_calls"] and a["llm_not_sampled"] > 0
+    assert [r["rule_risk"] for r in rv["rows"]] == [r["rule_risk"] for r in b["llm_reviewed"]["rows"]]
+    assert {r["category"] for r in rv["rows"]} <= {"bec", "payment_chasing"}
+    for key in ("rules", "hybrid", "hybrid_raise_only", "llm_alone"):
+        assert sum(rv[key][k] for k in ("tp", "fp", "tn", "fn")) == 3
+    # an always-"safe" model: raise-only equals the rules; the LLM alone flags nothing
+    assert rv["hybrid_raise_only"] == rv["rules"] and rv["llm_alone"]["tp"] == rv["llm_alone"]["fp"] == 0
+    assert all(r["final_risk"] >= max(20.0, r["content_floor"]) for r in rv["rows"])
+
+
+def test_cli_prints_reviewed_table(capsys, monkeypatch):
+    import phishguard.dataset.evaluate as ev
+
+    monkeypatch.setattr(
+        ev,
+        "run_modes",
+        lambda modes, datasets, **kw: [
+            ev.evaluate(30, seed=3, mode="hybrid", llm=Says(), llm_sample={"bec": 2}, price_in=1.0, price_out=1.0)
+        ],
+    )
+    ev.main(["--modes", "hybrid", "--llm-sample", "bec=2", "--max-llm-api-calls", "5"])
+    out = capsys.readouterr().out
+    assert (
+        "LLM-reviewed mails only" in out and "| synthetic | bec | 2 | hybrid, raise only |" in out and "cost $" in out
+    )
