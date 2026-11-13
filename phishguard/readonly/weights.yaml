@@ -5,7 +5,8 @@
 #   python scripts/calibrate.py --data-dir data/external --out weights.suggested.yaml
 # Evidence for every change since version 1: docs/DESIGN.md, "Real-corpus calibration" (Q31-Q39),
 # based on docs/real_corpus_error_analysis.md (15,721 real messages, aggregates only).
-version: 2
+# Version 4 (false-positive round, dev split only): DESIGN Q63-Q68.
+version: 4
 
 weights:
   # --- sender identity -------------------------------------------------------------------
@@ -35,11 +36,14 @@ weights:
   prompt_injection_attempt: 0.50
   bank_detail_change: 0.45
   credential_request: 0.25  # calibrated v3 (dev, easy_ham FPR<=1%)
+  credential_action: 0.35        # v4: 'verify your account', 'account suspended', ... (not a bare 'password')
   hidden_html_text: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
   secrecy_request: 0.16  # calibrated v3 (dev, easy_ham FPR<=1%)
   obfuscated_text: 0.25
   urgency_language: 0.25  # calibrated v3 (dev, easy_ham FPR<=1%)
+  urgency_deadline: 0.30         # v4: 'within 24 hours', 'final notice', 'overdue', ...
   payment_keywords: 0.20
+  payment_account_terms: 0.30    # v4: bank account, IBAN, routing number, gift cards, bitcoin
   # Same keywords from a sender that is on OUR trusted-domain list AND passed DMARC (or SPF+DKIM):
   # invoices and deadlines are normal business with known partners. Inert without trusted domains
   # (so the real-corpus numbers are unaffected). Bank-detail changes keep full weight. DESIGN Q42.
@@ -60,6 +64,7 @@ weights:
   # The old catch-all "suspicious_link" (any host unrelated to the sender) fired on 82.6% of ham and
   # 84.3% of phish while adding ~23 points each time: no information, lots of score. It is now split.
   link_text_mismatch: 0.45
+  link_text_mismatch_own_domain: 0.25  # v4: real target is the sender's own domain; never for brand/look-alike text
   lookalike_link: 0.45           # imitates one of OUR trusted domains (edit distance / homoglyph)
   link_brand_impersonation: 0.45 # a well-known brand as a token of a host that brand doesn't own
   link_at_obfuscation: 0.45      # http://paypal.com@evil.example/ - the real host is after the @

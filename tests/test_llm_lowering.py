@@ -40,7 +40,7 @@ def run(email, settings=ON, text='{"risk": 0, "rationale": "safe"}'):
 CONTEXT_ONLY = dict(
     sender_email="desk@partner.example", reply_to="desk@replies-partner.example", body="See you Thursday."
 )
-CONTENT = dict(sender_email="it@notices.example", body="Confirm your account today, this is time-sensitive.")
+CONTENT = dict(sender_email="it@notices.example", body="Confirm your password today, this is time-sensitive.")
 
 
 def test_default_is_off_and_nothing_is_lowered():
@@ -77,7 +77,7 @@ def test_content_signals_are_the_floor():
             sender_email="it@notices.example", body="Verify your account.", timestamp="2026-03-03T23:00:00+00:00"
         )
     )
-    assert r.rule_risk == 31.0 and r.risk_percent == r.content_floor == 25.0
+    assert r.rule_risk == 40.2 and r.risk_percent == r.content_floor == 35.0  # v4: credential_action
 
 
 def test_outside_the_band_the_rules_win():

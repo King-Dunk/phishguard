@@ -13,7 +13,8 @@ DEFAULT_MODEL = "claude-haiku-5-5"
 # split (local run, 70/30 content-hash split) 50 caught only 35.0% of phishing while 35 caught 60.8%
 # with easy_ham FPR 1.4% (vs 0.2%) and precision 97.5% (vs 98.7%). The cost is hard_ham (marketing-like
 # legitimate mail): FPR 56.1% vs 21.2%. A missed phish costs more than a flagged newsletter, and the
-# planned hybrid step sends exactly that 20-50 band to an LLM. See README "Real data results".
+# planned hybrid step sends exactly that 20-50 band to an LLM. Weights v4 + polite-BEC/image rules at 35
+# (test split, 2026-11-13): recall 70.6%, easy_ham FPR 0.8%, hard_ham FPR 25.8%. See README "Real data results".
 DEFAULT_THRESHOLD = 35.0
 
 

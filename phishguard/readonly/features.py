@@ -68,14 +68,15 @@ SHORTENERS = {
 }
 DEFAULT_SAFE_LINK_DOMAINS = ("google.com", "github.com", "zoom.us", "microsoft.com", "notion.so")
 
-URGENCY = re.compile(
-    r"\b(urgent|immediately|asap|right away|within \d+ (hours?|hrs?)|final notice|act now|time[- ]sensitive|overdue)\b"
-    r"|紧急|立即|马上|尽快|逾期"
-)
-PAYMENT = re.compile(
-    r"\b(wire|transfer|invoice|payment|remit|bank account|iban|swift|gift cards?|bitcoin|crypto|routing number)\b"
-    r"|转账|汇款|发票|付款|银行账户|礼品卡"
-)
+# Keyword features are split by context (DESIGN Q64). The specific sub-pattern of each is checked
+# first and scored under its own weight key; the feature *name* stays the same for API callers.
+URGENCY_DEADLINE = re.compile(r"\b(within \d+ (hours?|hrs?)|final notice|act now|time[- ]sensitive|overdue)\b|逾期")
+URGENCY_WORD = re.compile(r"\b(urgent|immediately|asap|right away)\b|紧急|立即|马上|尽快")
+URGENCY = re.compile(f"{URGENCY_DEADLINE.pattern}|{URGENCY_WORD.pattern}")
+# Money destinations (where funds go) vs words that are everywhere in normal business/tech mail.
+PAYMENT_ACCOUNT = re.compile(r"\b(bank account|iban|swift|gift cards?|bitcoin|routing number)\b|银行账户|礼品卡")
+PAYMENT_WORD = re.compile(r"\b(wire|transfer|invoice|payment|remit|crypto)\b|转账|汇款|发票|付款")
+PAYMENT = re.compile(f"{PAYMENT_ACCOUNT.pattern}|{PAYMENT_WORD.pattern}")
 BANK_CHANGE = re.compile(
     r"(new|updated|changed|different|revised)\s+(bank(ing)?|payment|account|remittance)\s+(details|information|instructions|account|number|info)"
     r"|(bank(ing)?|account)\s+(details|information|number)\s+(?:(?:has|have|had)\s+)?(?:been\s+)?(changed|updated|revised)"
@@ -85,9 +86,12 @@ BANK_CHANGE = re.compile(
 SECRECY = re.compile(
     r"\b(confidential|don'?t (tell|share|discuss)|do not (tell|share|discuss)|keep this (between|quiet)|discreet)\b|保密|不要告诉"
 )
-CREDENTIAL = re.compile(
-    r"\b(password|passcode|verify your account|confirm your (identity|account)|login credentials|account (suspended|locked))\b|验证.{0,4}账户|密码"
+# A request to act on an account vs merely mentioning a password (mailing lists talk about passwords).
+CREDENTIAL_ACTION = re.compile(
+    r"\b(verify your account|confirm your (identity|account)|login credentials|account (suspended|locked))\b|验证.{0,4}账户"
 )
+CREDENTIAL_WORD = re.compile(r"\b(password|passcode)\b|密码")
+CREDENTIAL = re.compile(f"{CREDENTIAL_ACTION.pattern}|{CREDENTIAL_WORD.pattern}")
 INJECTION = re.compile(
     r"ignore (all |any )?(previous|prior|above) (instructions|rules)|system prompt"
     r"|\byou are now (a |an |the |my )?(system|admin(istrator)?|root|developer|ai|assistant|dan|jailbroken|unrestricted)\b"
@@ -99,6 +103,15 @@ INJECTION = re.compile(
     r"|\b(transfer_funds|pay_invoice|approve_invoice|change_bank_details|reset_password|change_account_email)\b"
     r"|</?(system|instructions?|assistant|tool_use|tool_result)>"
     r"|已获得.{0,6}(mfa|授权|验证|批准)|以系统(身份|管理员)|系统指令|执行转账"
+)
+# (feature name, ((pattern, weight key or None for the name itself), ...)), most specific first.
+KEYWORD_FEATURES = (
+    ("urgency_language", ((URGENCY_DEADLINE, "urgency_deadline"), (URGENCY_WORD, None))),
+    ("payment_keywords", ((PAYMENT_ACCOUNT, "payment_account_terms"), (PAYMENT_WORD, None))),
+    ("bank_detail_change", ((BANK_CHANGE, None),)),
+    ("secrecy_request", ((SECRECY, None),)),
+    ("credential_request", ((CREDENTIAL_ACTION, "credential_action"), (CREDENTIAL_WORD, None))),
+    ("prompt_injection_attempt", ((INJECTION, None),)),
 )
 RISKY_EXT = (
     ".pif",
@@ -243,6 +256,7 @@ _LEET = str.maketrans({"@": "a", "4": "a", "3": "e", "1": "i", "!": "i", "0": "o
 _SPLIT_RUN = re.compile(r"(?<![\w@$!])(?:[\w@$!][ .\-_*/|]){2,}[\w@$!](?![\w@$!])")
 _B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 MAX_HOST = 253  # DNS limit; longer "hosts" are cut so string metrics stay cheap
+NON_WEB_SCHEMES = ("mailto:", "tel:", "sms:", "callto:", "cid:", "mid:", "news:", "sip:")
 
 
 @dataclass(frozen=True)
@@ -426,6 +440,10 @@ def link_signals(url: str, sreg: str, ctx: DetectionContext) -> list[tuple[str, 
     low = raw.lower()
     if low.startswith(("data:", "javascript:", "vbscript:")):
         return [("link_data_uri", f"{low.split(':', 1)[0]}: link")]
+    if low.startswith(NON_WEB_SCHEMES):
+        # mailto:/tel:/cid: are not web links. Parsing "mailto:a@b" as a URL put the address in the
+        # netloc, so every mailto link fired link_at_obfuscation (41% of dev hard_ham; DESIGN Q63).
+        return out
     try:
         parsed = urlparse(raw if "//" in raw else "//" + raw)
         host = (parsed.hostname or "").lower()[:MAX_HOST]
@@ -454,6 +472,18 @@ def link_signals(url: str, sreg: str, ctx: DetectionContext) -> list[tuple[str, 
     if not out and reg != sreg and not is_under(host, ctx.trusted_domains + ctx.safe_link_domains) and not _is_ip(host):
         out.append(("unrelated_link_host", f"link to unrelated host {host}"))
     return out
+
+
+def _claims_known_host(host: str, ctx: DetectionContext) -> bool:
+    """The host names one of OUR domains (or imitates one) or a well-known brand."""
+    if is_under(host, ctx.trusted_domains) or homoglyph_of(host, ctx.trusted_domains):
+        return True
+    if lookalike_of(host, ctx.trusted_domains):
+        return True
+    tokens = set(re.split(r"[.\-]", skeleton(host)))
+    return any(
+        b in tokens or any(host == d or host.endswith("." + d) for d in owned) for b, owned in ctx.table.brands.items()
+    )
 
 
 def extract_features(
@@ -537,21 +567,20 @@ def extract_features(
     known_partner = authenticated and bool(ctx.trusted_domains) and is_under(sdom, ctx.trusted_domains)
     soft = {"urgency_language", "payment_keywords"} if known_partner else set()
     obfuscated = None
-    for name, rx in (
-        ("urgency_language", URGENCY),
-        ("payment_keywords", PAYMENT),
-        ("bank_detail_change", BANK_CHANGE),
-        ("secrecy_request", SECRECY),
-        ("credential_request", CREDENTIAL),
-        ("prompt_injection_attempt", INJECTION),
-    ):
-        for tag, t in variants:
-            if t and (m := rx.search(t)):
-                key = f"{name}_trusted_sender" if name in soft else None
-                add(name, f"matched '{m.group(0)}'{tag}", key)
-                if tag and obfuscated is None:
-                    obfuscated = f"keyword '{m.group(0)}' only visible{tag}"
+    for name, patterns in KEYWORD_FEATURES:
+        hit = None
+        for rx, sub in patterns:  # specific context first, so it wins over the generic word
+            hit = next(((tag, m, sub) for tag, t in variants if t and (m := rx.search(t))), None)
+            if hit:
                 break
+        if not hit:
+            continue
+        tag, m, sub = hit
+        key = f"{name}_trusted_sender" if name in soft else sub
+        add(name, f"matched '{m.group(0)}'{tag}", key)
+        plain = any(rx.search(seen) for rx, _ in patterns)
+        if tag and not plain and obfuscated is None:
+            obfuscated = f"keyword '{m.group(0)}' only visible{tag}"
     if obfuscated:
         add("obfuscated_text", obfuscated)
 
@@ -622,14 +651,26 @@ def extract_features(
     for name, ev in link_hits.items():
         add(name, ev)
 
-    for lp in email.link_pairs:
+    # A mismatch whose real target is the sender's own registrable domain (its click tracker) reveals
+    # nothing the From header doesn't already say, so it gets a lower key. It never applies when the
+    # sender itself is a look-alike, or when the shown host is a brand/trusted domain (DESIGN Q65).
+    sender_ok = bool(sreg) and not (homo or look)
+    own_only: str | None = None
+    for lp in email.link_pairs[:100]:
         shown = clean_text(lp.text).strip().rstrip(".,;")
         if not _URLISH.match(shown):
             continue
         th, hh = _host(shown), _host(lp.href)
         if th and hh and registrable(th) != registrable(hh):
-            add("link_text_mismatch", f"link text shows {th} but points to {hh}")
+            ev = f"link text shows {th} but points to {hh}"
+            if sender_ok and registrable(hh) == sreg and not _claims_known_host(th, ctx):
+                own_only = own_only or ev
+                continue
+            add("link_text_mismatch", ev)
+            own_only = None
             break
+    if own_only:
+        add("link_text_mismatch", f"{own_only} (the sender's own domain)", "link_text_mismatch_own_domain")
 
     names = [(a, "") for a in email.attachments] + [(m.filename, m.content_type) for m in email.attachment_meta]
     att_hits: dict[str, str] = {}

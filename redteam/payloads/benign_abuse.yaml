@@ -1,0 +1,52 @@
+category: evasion
+description: >
+  Weights v4 lowered the score of some legitimate-looking patterns (mailto links are no longer read as
+  "@" obfuscation; a link-text mismatch whose real target is the sender's own domain gets a lower key).
+  Each payload here tries to abuse one of them. Expected: still risk >= 50, and the lower key must not
+  apply where the design says it never does (brand or look-alike link text, look-alike sender).
+  keys_all / keys_none are checked on weight keys and count as invariants, not detection quality.
+attacks:
+  - id: ba-mailto-cover
+    title: mailto links as cover for a real user@host obfuscated web link
+    kind: eml
+    eml:
+      text: "Please verify your account within 24 hours or it will be closed."
+      html: '<p>Questions? <a href="mailto:help@pay-support.example">help@pay-support.example</a></p><a href="http://www.paypal.com@login-verify.example/session">www.paypal.com</a><a href="MAILTO:billing@pay-support.example">billing</a>'
+    expect: {min_risk: 50, features_any: [link_at_obfuscation], keys_all: [link_at_obfuscation]}
+  - id: ba-own-domain-brand-text
+    title: Link text shows a brand, href goes to the attacker's own (sender) domain
+    kind: eml
+    eml:
+      from: "Service <service@pp-account-center.example>"
+      text: "We noticed unusual activity. Please verify your account."
+      html: '<p>Sign in at <a href="https://pp-account-center.example/login">www.paypal.com</a></p>'
+    expect: {min_risk: 50, keys_all: [link_text_mismatch], keys_none: [link_text_mismatch_own_domain]}
+  - id: ba-own-domain-lookalike-sender
+    title: Look-alike sender links to itself while showing our real portal
+    kind: eml
+    eml:
+      from: "IT Service Desk <it@acme-c0rp.com>"
+      text: "Your mailbox is full, sign in to keep receiving mail."
+      html: '<a href="https://acme-c0rp.com/sso">portal.acme-corp.com</a>'
+    expect: {min_risk: 50, keys_none: [link_text_mismatch_own_domain]}
+  - id: ba-own-domain-capped
+    title: Own-domain mismatch with an unbranded bank name still flags on content
+    kind: eml
+    eml:
+      from: "Accounts <accounts@secure-verify-center.example>"
+      text: "Your account suspended. Verify your account within 24 hours to restore access."
+      html: '<a href="https://secure-verify-center.example/login">www.northwind-bank.example</a>'
+    expect: {min_risk: 50, keys_all: [link_text_mismatch_own_domain, credential_action]}
+  - id: ba-list-headers-cover
+    title: Phish dressed as a newsletter (List-Id, List-Unsubscribe, Precedence bulk, footer)
+    kind: eml
+    eml:
+      from: "Payroll Newsletter <news@payroll-updates.example>"
+      reply_to: "payroll.desk@gmail.com"
+      text: "Monthly update. Confirm your identity and send your bank account number to keep your salary. Unsubscribe | Manage preferences"
+      headers:
+        List-Id: "<payroll.payroll-updates.example>"
+        List-Unsubscribe: "<mailto:unsubscribe@payroll-updates.example>"
+        Precedence: bulk
+      attachments: [{name: "payslip.pdf.exe", ctype: application/octet-stream}]
+    expect: {min_risk: 50, keys_all: [reply_to_freemail, risky_attachment, credential_action]}

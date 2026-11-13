@@ -237,6 +237,12 @@ def _expect_common(c: Ctx, r: Resp) -> None:
             )
         if "features_any" in exp:
             c.check("feature", bool(names & set(exp["features_any"])), f"want one of {exp['features_any']}")
+        # weight keys (sub-cases such as link_text_mismatch_own_domain share the feature name)
+        keys = {f.get("key", f["name"]) for f in body.get("features", [])}
+        if "keys_all" in exp:
+            c.check("keys", set(exp["keys_all"]) <= keys, f"want all of {exp['keys_all']}; got {sorted(keys)}")
+        if "keys_none" in exp:
+            c.check("no_keys", not keys & set(exp["keys_none"]), f"must not fire {exp['keys_none']}")
         _check_llm_floor(c, body)
         if exp.get("not_lowered"):
             c.check("not_lowered", body.get("lowered_by_llm") is False and c.risk == body.get("rule_risk"), _lf(body))
