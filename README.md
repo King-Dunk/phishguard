@@ -388,7 +388,7 @@ python -m phishguard.dataset.evaluate --dataset external --split --sweep --fpr-r
 
 **v4** (test split, measured once after the weights were frozen): recall 70.4% (2435/3460), precision 98.9%, easy_ham FPR 0.8% (9/1156), hard_ham FPR 25.8% (17/66, was 39/66). Recall at 1% easy_ham FPR 70.4% (v3: 69.6%), at 5% 76.8% (v3: 77.2%, a small loss). Synthetic F1 95.9% (unchanged). The hard_ham test set is small (66 mails), so ±6 points is within noise. Most of the gain is a bug fix: `mailto:` links were parsed as web URLs with the address in the host part, so every mailto link fired `link_at_obfuscation` (41% of dev hard_ham). The other changes split keyword features by context and give a lower key to a link-text mismatch whose real target is the sender's own domain. The evidence is in DESIGN Q63-Q68, from the dev split only.
 
-**v4 merged with the polite-BEC and image-lure rules** (re-measured 2026-11-13 on this branch after merging `main`, same command): test split recall 70.6% (2444/3460), precision 99.0%, easy_ham FPR 0.8% (9/1156), hard_ham FPR 25.8% (17/66); dev split recall 70.8% (5741/8111), precision 98.8%, easy_ham FPR 0.8% (23/2744), hard_ham FPR 26.1% (48/184). Before v4 (`main` with v3 weights and the same new rules): test recall 69.9%, easy_ham FPR 0.9%, hard_ham FPR 59.1%. The real-model sample in "Hybrid on real mail" was run with v3 weights and has not been repeated with v4.
+**v4 merged with the polite-BEC and image-lure rules** (re-measured 2026-11-13 on this branch after merging `main`, same command): test split recall 70.6% (2444/3460), precision 99.0%, easy_ham FPR 0.8% (9/1156), hard_ham FPR 25.8% (17/66); dev split recall 70.8% (5741/8111), precision 98.8%, easy_ham FPR 0.8% (23/2744), hard_ham FPR 26.1% (48/184). Before v4 (`main` with v3 weights and the same new rules): test recall 69.9%, easy_ham FPR 0.9%, hard_ham FPR 59.1%. The real-model sample in "Hybrid on real mail" was first run with v3 weights and repeated with v4 on 2026-11-14.
 
 **v3** is the output of the FPR-constrained `calibrate.py` (dev split only, `no_authentication`/`off_hours_send` frozen), checked once on the test split: +8.8 points of recall over v2 with *lower* easy_ham FPR (0.9% vs 1.4%). The calibrator raised `reply_to_mismatch` and `return_path_mismatch` (non-list mail), `link_shortener`, `archive_attachment` and `image_lure`. hard_ham remained the weak spot (59.1%), which v4 addresses.
 
@@ -473,6 +473,27 @@ What it says:
 - **The benign vote cleared few false positives, and the floor is why.** The model voted benign on every legitimate mail it answered for, but only 6 of the 29 flagged ones could be lowered (hard_ham 24 to 20, easy_ham 5 to 3). Of the other 23, 22 were held by the content-only floor or a veto and one got no parseable answer. The one phishing mail the model scored under 35 was also held, by the same rule. hard_ham FPR on the test split goes from 59.1% to 53.0%, exactly the ceiling the stand-in run predicted.
 - **Cost and latency.** About $0.00087 and 6 seconds per reviewed mail. 28.8% of the test split (1,349 of 4,682) falls in the gray zone; a real inbox has a different mix.
 - The floor that blocks 22 correct benign votes is the same floor that bounds an injected model at 6.5 points of recall. Loosening it is a trade, not a fix, and needs the same two measurements first.
+
+#### Repeated with weights v4 (2026-11-14)
+
+Same command, same sample sizes and cap, on `main` with weights v4 and the polite-BEC/image rules. Raw scores: `docs/hybrid_real_run_20261114_v4.json`. v4 moves fewer legitimate mails into the gray zone, so the model reviewed 115 mails: 30 easy_ham, **all 25** gray-zone hard_ham, 60 of the gray-zone phishing. 345 model requests (3.0 per mail), no API errors, one mail with no parseable answer, no circuit breaks.
+
+| On the 115 reviewed mails | rules | hybrid, raise only | hybrid with benign vote | model's own score |
+|---|---|---|---|---|
+| Phishing caught (of 60) | 45 | 59 | 59 | 58 |
+| hard_ham false positives (of 25) | 10 | 10 | 5 | 0 |
+| easy_ham false positives (of 30) | 4 | 4 | 2 | 0 |
+
+| Real corpus, **test split** (4,682 mails), v4 | Recall | Precision | FPR easy_ham | FPR hard_ham |
+|---|---|---|---|---|
+| rules | 70.7% (2445/3460) | 98.9% | 0.8% (9/1156) | 25.8% (17/66) |
+| hybrid with benign vote, **sampled** | 71.1% (2459/3460) | 99.2% | 0.6% (7/1156) | 18.2% (12/66) |
+
+- As before, only the hard_ham figure is complete (every gray-zone hard_ham mail was reviewed); recall and easy_ham FPR are understated, because 1,214 gray-zone mails were not sampled.
+- With v4, the benign vote halved the reviewed hard_ham false positives (10 → 5). Under v3 it cleared 4 of 24: v4 removed the content signals that used to hold the floor up on marketing mail.
+- Cost $0.0979 for 115 mails ($0.00085 each) at $0.10 / $0.50 per million tokens (538,862 input, 87,976 output tokens, from the API's reported usage, not a bill). Latency per reviewed mail: mean 6.06 s, median 5.80 s, max 13.76 s.
+- The rules row says 2445 caught; a rules-only run of the same split earlier the same day counted 2444. One mail, not investigated (the same one-mail drift was seen on the v4 branch before).
+- The test split has now been looked at several times during this work, so by the rule below these numbers are closer to dev numbers than to a clean held-out estimate.
 
 ### Evaluation pitfalls
 
@@ -619,7 +640,7 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Test passkeys on real devices (Touch ID, Windows Hello, a FIDO2 key) and add attestation checks for managed devices; factor recovery and admin reset flows with their own audit trail.
 - Implement one real payment adapter against a provider sandbox (Stripe test mode or a bank's ISO 20022 sandbox), with Confirmation-of-Payee style name checks on bank-detail changes.
 - Bind approvers to SSO identity, and require a *different* person to approve payments above a threshold (dual control).
-- **Hybrid on real mail.** Done once on a sample ("Hybrid on real mail"): raise-only hybrid recovered 13 of 13 missed phishing mails among 60 reviewed; the opt-in benign vote took hard_ham FPR from 59.1% to 53.0% on the test split. Next: run the full gray zone of the test split (1,349 mails; this run used 3.02 model requests per mail) to get whole-split recall and easy_ham FPR for hybrid; cut requests per mail (the agent spends two tool calls before answering); measure with the v4 weights of PR #8, where far fewer hard_ham mails are flagged to begin with; and decide on the floor only after measuring both the gain and the injected-model bound for any wider variant.
+- **Hybrid on real mail.** Done twice on a sample ("Hybrid on real mail"): with v3, raise-only hybrid recovered 13 of 13 missed phishing mails among 60 reviewed and the benign vote took hard_ham FPR from 59.1% to 53.0%; with v4, 14 of 15 were recovered and hard_ham FPR went from 25.8% to 18.2% on the test split. Next: run the full gray zone of the test split (1,329 mails under v4 at ~3 model requests each) to get whole-split recall and easy_ham FPR for hybrid; cut requests per mail (the agent spends two tool calls before answering); and decide on the floor only after measuring both the gain and the injected-model bound for any wider variant.
 - Calibrate on a modern legitimate-mail corpus, so era artifacts stop mattering.
 - Mailbox connectors: run against real Gmail, Microsoft 365, Outlook.com and a few IMAP providers (iCloud, Fastmail, QQ, 163) and fix whatever the fakes got wrong; add certificate credentials for Graph app-only auth; a shared checkpoint store for several workers; per-mailbox rate budgets for large tenants.
 
