@@ -13,7 +13,7 @@
 1. **Hard read/write isolation.** Everything that analyzes mail lives in `phishguard/readonly/`. Everything that can change state lives in `phishguard/mutating/`. The LLM is only ever given read-only tools, and the read-only side cannot import the mutating side. Tests prove it.
 2. **Multi-factor enforcement gateway.** Actions touching funds, account changes or invoices are suspended in `mutating/gateway.py` and released only after **two different factors** pass (password, security questions, TOTP, passkey/WebAuthn; at least one must not be a knowledge factor), each checked against the echoed action digest, with timeout, attempt limits and lockout. Nothing the LLM, the email or the request body says can skip this.
 3. **Explainable scoring on real mail.** Raw RFC 822 / `.eml` input (multipart, HTML, attachments). Every feature reports its contribution in score points, and the contributions add up to the final score, so an analyst sees *why* a mail scored 68%.
-4. **Red team in a sandbox, with fixes.** 76 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 11 real problems, all fixed with regression tests.
+4. **Red team in a sandbox, with fixes.** 85 attack payloads (YAML) run against the API in a locked-down container pair or in-process; every attack is followed by invariant checks (MFA never bypassed, SQL never rewritten, no crash). The suite found 11 real problems, all fixed with regression tests.
 5. **Self-improvement that cannot touch security code.** `redteam/improve.py` mines missed phishing and drafts rule proposals for a human; patches that touch the MFA gateway are refused by code.
 6. **Payments behind open interfaces.** Approved actions go to a `PaymentProvider` / `AccountProvider`. The default `SimulatedBank` has balances, daily and per-transfer limits, idempotency and a cooling-off period for new or changed bank details; documented stubs show where a bank (ISO 20022), Stripe, Xero or MYOB adapter plugs in ([docs/PAYMENTS_INTEGRATION.md](docs/PAYMENTS_INTEGRATION.md)).
 7. **Hybrid rules + LLM to save money.** Rules handle clear-cut mail for free; only the gray zone (score 20-50, around the default threshold of 35) is sent to the LLM. `evaluate.py` measures the trade-off side by side.
@@ -326,7 +326,7 @@ Measured on this repo (600 synthetic mails, threshold 35):
 
 Confusion for rules: TP 288, FP 0, TN 299, FN 13 (BEC recall 93.5%, payment chasing 100%). Latency depends on the machine. Besides the table, `evaluate.py` reports recall at a fixed 1% and 5% false-positive rate (`--fpr-ref easy_ham` to measure FPR on one category) and, with `--sweep`, every threshold from 30 to 60 in steps of 5.
 
-**Why hybrid (the money argument).** Most mail is clear-cut: internal notes score near 0, a punycode sender with a failed DMARC scores near 100. Paying an LLM to confirm either is waste. Hybrid runs the free rules first and calls the LLM only when the rule score lands in the gray zone (20-50 by default, `--gray-low/--gray-high`; centered on the default threshold of 35). Cost scales with the gray-zone share instead of with total volume, and the "LLM call rate" column shows that share directly. On this synthetic set 41 of 600 mails (6.8%) fall in 20-50; 9 of the 13 rule misses (scores 22 and 31) are inside it, the other 4 score 15. The real share on real mail must be measured. Caveat: the LLM can only *raise* a score (anti-injection floor), so hybrid can recover gray-zone misses but cannot remove false positives.
+**Why hybrid (the money argument).** Most mail is clear-cut: internal notes score near 0, a punycode sender with a failed DMARC scores near 100. Paying an LLM to confirm either is waste. Hybrid runs the free rules first and calls the LLM only when the rule score lands in the gray zone (20-50 by default, `--gray-low/--gray-high`; centered on the default threshold of 35). Cost scales with the gray-zone share instead of with total volume, and the "LLM call rate" column shows that share directly. On this synthetic set 41 of 600 mails (6.8%) fall in 20-50; 9 of the 13 rule misses (scores 22 and 31) are inside it, the other 4 score 15. The real share on real mail must be measured. By default the LLM can only *raise* a score (anti-injection floor), so hybrid can recover gray-zone misses but cannot remove false positives. An opt-in, restricted lowering path exists (`--llm-may-lower`, see "LLM benign vote" below).
 
 **Read this carefully:** the dataset is synthetic, and the rules and the generator were written by the same author, so they share assumptions. Treat these numbers as a regression baseline. The 10 hand-written `.eml` files in `tests/fixtures/` check each new signal, not accuracy. Real validation needs labeled real mail.
 
@@ -382,6 +382,31 @@ Compared with v1 (threshold 50), v2 at threshold 35 keeps the same recall (60.8%
 
 **Why the calibration suggestion was rejected.** It raised recall to 88.4% by flagging 38.2% of easy_ham and 83.3% of hard_ham, which is unusable. Two causes: it raised `no_authentication` to 0.45, learning the dataset's era (2002 legitimate mail predates DKIM) instead of anything about phishing; and it optimized F1, which on a test set of about 3 phishing per legitimate mail rewards flagging everything. `calibrate.py` now maximizes recall subject to easy_ham FPR <= 1% (or a class-balanced metric), freezes era/time-zone features by default, and prints a suggested threshold. See "Evaluation pitfalls".
 
+### LLM benign vote (opt-in, injection-resistant lowering)
+
+`PHISHGUARD_LLM_MAY_LOWER=1` (API) or `--llm-may-lower` (`evaluate.py`) lets an LLM answer below the rule score count, under four rules that live in code (`agent.lowered_risk`), not in the prompt:
+
+1. **Band.** Only when the rule score is between 20 and 50. Outside it the rules win.
+2. **Band edge.** The result is never below 20.
+3. **Content-only floor.** The result is never below the rule score of everything except routing and time context. The only signals a vote can discount are an allowlist: `reply_to_mismatch` (not the free-mail case), `reply_to_mismatch_list`, `return_path_mismatch`, `no_authentication`, `off_hours_send`, `moderate_reputation`, `young_domain`. Wording, links, attachments, identity and authentication failures, and any feature added later, stay.
+4. **Veto.** No lowering at all when the mail hides text, obfuscates keywords or addresses the model (`hidden_html_text`, `obfuscated_text`, `prompt_injection_attempt`).
+
+It is **off by default**. The API response reports `rule_risk`, `llm_risk`, `content_floor` and `lowered_by_llm` for audit.
+
+The red-team attacks were written first (`redteam/payloads/benign_vote.yaml`, 9 mails that try to talk the model into "safe", run against a model that answers risk 0 to everything). A new `llm_floor` security invariant is recomputed by the runner from each response, for every attack in every category. Against a naive version that just accepts the model's lower score, the same run reports 38 security breaches in 85 attacks; against this implementation, none. One payload documents the accepted limit: a mail flagged *only* by routing context (risk 35) is lowered to 20 by a compromised model.
+
+What a fully injected model could do, and the most a perfect model could gain, measured on the real corpus with stand-in models (no API calls; rules mode vs hybrid with a model that answers "risk 0" to every gray-zone mail; threshold 35):
+
+| Real corpus split | Mode | Recall | FPR easy_ham | FPR hard_ham | Gray-zone mails | Lowered |
+|---|---|---|---|---|---|---|
+| **test** | rules | 69.6% (2407/3460) | 0.9% (11/1156) | 59.1% (39/66) | | |
+| **test** | hybrid, always-"safe" model, lowering off (default) | 69.6% (2407/3460) | 0.9% (11/1156) | 59.1% (39/66) | 1349 | 0 |
+| **test** | hybrid, always-"safe" model, lowering **on** | 63.0% (2181/3460) | 0.8% (9/1156) | 53.0% (35/66) | 1349 | 1182 |
+| dev | rules | 69.1% (5604/8111) | 0.9% (24/2744) | 59.2% (109/184) | | |
+| dev | hybrid, always-"safe" model, lowering **on** | 63.1% (5121/8111) | 0.7% (20/2744) | 55.4% (102/184) | 3113 | 2742 |
+
+Two things follow. The worst case is bounded but not small: an attacker who fully controls the model's answer on every mail takes 6.5 points of recall on the test split (226 phishing mails that were flagged mainly by routing context). And the best case is modest: even a model that correctly calls every legitimate mail benign can clear at most 4 of the 39 flagged hard_ham test mails (59.1% to 53.0%), because most hard_ham false positives on these weights come from content signals, which the floor protects. That is why the switch is off by default. These are stand-in models; no real-model numbers are part of this change.
+
 ### Evaluation pitfalls
 
 - **F1 and accuracy depend on the class ratio.** The test split has about 3 phishing per legitimate mail. A classifier that flags *everything* scores precision ~75%, recall 100%, F1 ~86%, which is better than the default operating point's F1, while being useless. Use measures that don't move with the ratio: recall at a fixed false-positive rate (`Recall @1% FPR` / `@5% FPR` columns), per-category FPR, or a class-balanced metric. A real inbox is mostly legitimate, which makes false positives far more frequent per day than this test split suggests.
@@ -405,7 +430,7 @@ Each change and its evidence is in `docs/DESIGN.md` (Q31-Q39). In short:
 
 ## Red Team Results
 
-`redteam/` holds 76 attacks in five YAML files (`payloads/`), a runner, and a Docker sandbox.
+`redteam/` holds 85 attacks in six YAML files (`payloads/`), a runner, and a Docker sandbox.
 
 ```bash
 python -m redteam.runner                      # in-process, writes redteam/report.md (pytest runs this)
@@ -424,7 +449,8 @@ Results (`redteam/report.md`, in-process). The Docker run gave the same totals f
 | b) Privilege escalation / MFA bypass (no/bad key, bypass flags, deep params, forged codes, swapped digest, TOTP replay, cross-user approval, identity variants, enrollment takeover, brute force; passkey replay across actions/users, phishing origin, no UV, cloned key, knowledge-only downgrade, same factor twice, question/password brute force, lockout reset, concurrent release, enrollment-token misuse, BEC cooling-off, limit splitting, non-ASCII inputs, secrets in audit) | 34 | 34/34 | n/a | 100% |
 | c) Injection & DoS (SQL into every SQLite field, path traversal, 4 MB body, MIME bombs, 50k-deep JSON, ReDoS, CRLF, RTL override, lone surrogates) | 20 | 20/20 | 5/5 | 100% |
 | d) Detection evasion (homoglyphs, split words, leetspeak, image-only, polite BEC) | 10 | 10/10 | 6/10 | 60% |
-| **Total** | 76 | **76/76** | | **95%** |
+| e) LLM benign-vote abuse (a compromised model answers "risk 0, safe" to every mail; reviewer notes, forged verdict JSON, hidden HTML, newsletter dressing, Chinese) | 9 | 9/9 | 9/9 | 100% |
+| **Total** | 85 | **85/85** | | **95%** |
 
 The 4 misses are all in (d): an image-only lure and three polite BEC mails with no money keywords. They are detection gaps, not breaches, and they feed the self-improvement step below.
 
@@ -490,7 +516,7 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Test passkeys on real devices (Touch ID, Windows Hello, a FIDO2 key) and add attestation checks for managed devices; factor recovery and admin reset flows with their own audit trail.
 - Implement one real payment adapter against a provider sandbox (Stripe test mode or a bank's ISO 20022 sandbox), with Confirmation-of-Payee style name checks on bank-detail changes.
 - Bind approvers to SSO identity, and require a *different* person to approve payments above a threshold (dual control).
-- **Hybrid on real mail (next step).** Call the LLM only when the rule score is in the gray zone 20-50 (now the default for `--modes hybrid`). That band holds both the missed phishing at threshold 35 and most of the flagged hard_ham, so it's where an LLM's reading of intent can add separation, and clear-cut mail stays free. Plan: run `--dataset external --split --modes rules,hybrid` locally and compare recall at 1% easy_ham FPR and hard_ham FPR against the rules row. One design caveat: today the LLM can only raise a score (injection floor), so it can recover misses but cannot clear hard_ham false positives. Lowering a score needs a separate, injection-resistant path (e.g. LLM "benign" votes may lower only within 20-50 and never below the content-only floor), with red-team tests first.
+- **Hybrid on real mail (next step).** Call the LLM only when the rule score is in the gray zone 20-50 (now the default for `--modes hybrid`). That band holds both the missed phishing at threshold 35 and most of the flagged hard_ham, so it's where an LLM's reading of intent can add separation, and clear-cut mail stays free. Plan: run `--dataset external --split --modes rules,hybrid` locally and compare recall at 1% easy_ham FPR and hard_ham FPR against the rules row. The lowering path now exists (opt-in `PHISHGUARD_LLM_MAY_LOWER=1`: benign votes count only within 20-50, never below the content-only floor, red-team attacks written first; see "LLM benign vote"). Stand-in models bound it on the real test split: at most 4 of 39 flagged hard_ham mails can be cleared, and a fully injected model costs 6.5 points of recall. Next: decide whether a wider floor (e.g. letting a vote discount generic urgency/payment wording on list mail) is worth the larger injection exposure, with the same bound measured first.
 - Calibrate on a modern legitimate-mail corpus, so era artifacts stop mattering.
 - Mailbox connectors: run against real Gmail, Microsoft 365, Outlook.com and a few IMAP providers (iCloud, Fastmail, QQ, 163) and fix whatever the fakes got wrong; add certificate credentials for Graph app-only auth; a shared checkpoint store for several workers; per-mailbox rate budgets for large tenants.
 
