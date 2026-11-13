@@ -57,6 +57,38 @@ attacks:
       from: "Maria G <maria.g.acme@gmail.com>"
       text: "Hello HR team, I recently switched to a new bank. Could you kindly direct my next salary deposit to the account below? Many thanks, Maria"
     expect: {min_risk: 50}
+  # --- round 9: new wordings written after the payment-redirection / image-lure rules, to check
+  # that those rules generalize beyond the four payloads above. Misses stay listed as gaps.
+  - id: ev-html-clickable-image
+    title: HTML body that is one clickable picture, no text
+    kind: eml
+    eml:
+      from: "Document Centre <docs@filesharing-notice.example>"
+      subject: "New document"
+      text: " "
+      html: '<a href="https://filesharing-notice.example/view?id=88"><img src="https://filesharing-notice.example/n.png" alt=""></a>'
+    expect: {min_risk: 35, features_any: [image_lure]}
+  - id: ev-polite-bec-vouchers-paraphrase
+    title: Polite gift-card BEC in different words (vouchers, "let me have the numbers")
+    kind: eml
+    eml:
+      from: "Sarah Miller <s.miller.private@yahoo.com>"
+      text: "Good morning, would you mind doing something for me before lunch? Please order six Amazon vouchers for the volunteers and let me have the numbers by email. Thank you!"
+    expect: {min_risk: 35, features_any: [payment_redirect_request]}
+  - id: ev-polite-bec-vendor-domain
+    title: Polite payee-detail change from an unknown company domain (no free mail, no executive name)
+    kind: eml
+    eml:
+      from: "Northwind Accounts <accounts@northwind-partners.example>"
+      text: "Hello, ahead of the next settlement could you amend the bank information you hold for us? The new details are in the attached letter. Kind regards, Accounts"
+    expect: {min_risk: 35, features_any: [payment_redirect_request]}
+  - id: ev-polite-bec-contact-probe
+    title: First-contact probe with no ask yet ("are you in the office? send me your mobile")
+    kind: eml
+    eml:
+      from: "David Chen <dchen.exec@proton.me>"
+      text: "Are you in the office today? I have a small task I'd like you to handle personally. Send me your mobile number and I'll explain by text."
+    expect: {min_risk: 50}
   - id: ev-zero-width-name
     title: Zero-width chars in executive display name
     kind: eml

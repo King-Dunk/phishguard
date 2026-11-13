@@ -42,7 +42,9 @@ def test_attack_categories_a_to_c_fully_intercepted(results):
 def test_known_detection_gaps_are_exactly_these(results):
     # Documented misses; improve.py turns them into proposals. If one starts passing, shrink this set.
     misses = {r["id"] for r in results if r["detection_ok"] is False}
-    assert misses == {"ev-image-only", "ev-polite-bec-remittance", "ev-polite-bec-giftcards", "ev-polite-bec-payroll"}
+    # The four original gaps (image-only, polite remittance / gift cards / payroll) closed with the
+    # payment-redirection and image-lure rules. Two of the four new wordings written afterwards miss.
+    assert misses == {"ev-polite-bec-vendor-domain", "ev-polite-bec-contact-probe"}
 
 
 def test_report_renders(results):

@@ -180,6 +180,61 @@ PASSWORD_HINT = re.compile(
     r"|\b(use|enter) (the )?(password|code) \S{3,} to (open|view|extract)"
     r"|解压密码|密码[:：]\s*\S{3,}"
 )
+# --- payment redirection (polite BEC) -----------------------------------------------------------
+# What a BEC mail has to say, however politely: "do something for me" plus "money goes somewhere
+# new". Matched as meaning families, not as phrases of any one sample. Gaps are bounded, so the
+# patterns stay linear on long bodies.
+_GAP = r"[^.?!\n]{0,80}"
+_GAP_NOT_YOUR = r"(?:(?!\byour\b)[^.?!\n]){0,80}"  # "update your account details" is credential_request's job
+ACTION_REQUEST = re.compile(
+    r"\b(?:(?:could|can|would|will) you|please|kindly|i need you to|i(?:'d| would) like you to|i want you to"
+    r"|need (?:a|your|some) (?:quick |small |little |urgent )?(?:favou?r|help|assistance|task)"
+    r"|(?:quick|small|little) (?:favou?r|task|request)"
+    r"|are you (?:at your desk|available|free|around|in the office|busy))\b"
+    r"|请|麻烦|帮我"
+)
+GIFT_CARD_BUY = re.compile(
+    r"\b(?:buy|purchase|pick up|get|grab|order|procure|arrange|need)\b" + _GAP + r"\b(?:(?:e-?)?gift|itunes|apple"
+    r"|google play|amazon|steam|prepaid|vanilla|scratch|store)[ -]?(?:cards?|vouchers?|certificates?)\b"
+    r"|\b(?:cards?|vouchers?)\b"
+    + _GAP
+    + r"\b(?:send|share|email|text|photo)\w*\b"
+    + _GAP
+    + r"\b(?:codes?|pins?|numbers?|back)\b"
+    r"|\b(?:send|share|email|text)\b" + _GAP + r"\b(?:codes?|pins?)\b" + _GAP + r"\b(?:cards?|vouchers?)\b"
+    r"|(?:购买|买).{0,10}(?:礼品卡|充值卡)"
+)
+_PAY_WORD = r"(?:salary|payroll|pay ?che(?:ck|que)s?|direct[ -]deposit|wages?|pay ?slip|pay)"
+_NEW_ACCT = r"(?:new|different|another|changed|switched|updated|moved)\b[^.?!\n]{0,30}\b(?:bank|account|credit union)"
+PAYROLL_REDIRECT = re.compile(
+    r"\b" + _NEW_ACCT + r"\b[\s\S]{0,160}\b(?:salary|payroll|pay ?che(?:ck|que)s?|direct[ -]deposit|wages?)\b"
+    r"|\b(?:salary|payroll|pay ?che(?:ck|que)s?|direct[ -]deposit|wages?)\b[\s\S]{0,160}\b" + _NEW_ACCT + r"\b"
+    r"|\b(?:update|change|switch|move|redirect|direct)\w*\b"
+    + _GAP_NOT_YOUR
+    + r"\b(?:direct[ -]deposit|payroll (?:details|info\w*|account)"
+    r"|salary (?:account|deposit))\b"
+    r"|工资.{0,12}(?:新|更换|变更).{0,6}(?:账户|账号|银行卡)"
+)
+PAYMENT_DETAIL_UPDATE = re.compile(
+    r"\b(?:updat|chang|amend|replac|switch|modif|revis|correct)\w*\b"
+    + _GAP_NOT_YOUR
+    + r"\b(?:remittance|bank(?:ing)?|payment"
+    r"|wire|beneficiary|payee|supplier|vendor)\s+(?:details|information|info|instructions|account|records?)\b"
+    r"|(?:更新|修改|变更).{0,10}(?:收款|付款|银行).{0,4}(?:信息|账户|账号)"
+)
+PAYMENT_DESTINATION = re.compile(
+    r"\b(?:transfer|wire|pay|paid|send|sent|remit|deposit|direct|route|credit)\w*\b"
+    + _GAP
+    + r"\b(?:to|into|using|via)\s+"
+    r"(?:the|this|our|my|a|an)\s+(?:(?:new|following|updated|different|attached|below|other|alternate|alternative)\s+)?"
+    r"(?:(?:bank|banking|payment|wire)\s+)?(?:account|details|iban|instructions|beneficiary)(?:\s+number)?"
+    r"(?:\s+(?:below|attached|above|as follows|following|listed|shown|i(?:'ll| will) (?:send|forward)|to follow)\b)?"
+    r"|(?:转|汇|付).{0,8}(?:到|至)(?:以下|下面|新).{0,4}(?:账户|账号)"
+)
+_DEST_GIVEN = re.compile(
+    r"\b(?:new|following|updated|different|attached|below|other|alternate|alternative|above|as follows|listed|shown"
+    r"|i(?:'ll| will) (?:send|forward)|to follow)\b|以下|下面|新"
+)
 _ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00ad"))
 # bidirectional controls: "invoice\u202efdp.exe" displays as "invoiceexe.pdf"
 BIDI = "\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
@@ -500,6 +555,39 @@ def extract_features(
     if obfuscated:
         add("obfuscated_text", obfuscated)
 
+    # Payment redirection: a request for action plus money going somewhere the mail itself names
+    # (gift-card codes, a payroll account change, a supplier-detail update, "the account below").
+    # Polite wording carries none of the urgency/secrecy keywords, so this looks at what is asked.
+    redirect = None
+    for tag, t in variants:
+        if not t:
+            continue
+        asked = ACTION_REQUEST.search(t)
+        for label, rx in (
+            ("gift cards and their codes", GIFT_CARD_BUY),
+            ("payroll paid into a new account", PAYROLL_REDIRECT),
+            ("change of payment details held for a payee", PAYMENT_DETAIL_UPDATE),
+        ):
+            if asked and (m := rx.search(t)):
+                redirect = f"request ('{asked.group(0)}') for {label}: '{m.group(0)[:80]}'{tag}"
+                break
+        if redirect is None and (m := PAYMENT_DESTINATION.search(t)) and _DEST_GIVEN.search(m.group(0)):
+            redirect = f"payment to a destination given in the mail: '{m.group(0)[:80]}'{tag}"
+        if redirect:
+            break
+    freemail_sender = sdom in FREE_MAIL or (bool(email.reply_to) and domain_of(email.reply_to or "") in FREE_MAIL)
+    if redirect:
+        if known_partner:
+            add("payment_redirect_request", redirect, "payment_redirect_request_trusted_sender")
+        elif freemail_sender:
+            add(
+                "payment_redirect_request",
+                redirect + f"; sender uses free mail ({sdom})",
+                "payment_redirect_request_freemail",
+            )
+        else:
+            add("payment_redirect_request", redirect)
+
     name = clean_text(email.sender_name)
     external = not is_under(sdom, ctx.trusted_domains)
     for ex in ctx.executives:
@@ -511,6 +599,13 @@ def extract_features(
         brand = next((b for b in ctx.brands() if b in cname), None) if external else None
         if brand:
             add("display_name_spoof", f"display name '{email.sender_name}' uses brand '{brand}' but sent from {sdom}")
+        elif sdom in FREE_MAIL:
+            local = _compact(email.sender_email.rsplit("@", 1)[0])
+            brand = next((b for b in ctx.brands() if b in local), None)
+            if brand:
+                add(
+                    "org_name_in_freemail_address", f"free-mail address {email.sender_email} carries our name '{brand}'"
+                )
 
     # Each link signal counts once per mail (first evidence wins), whatever the number of links.
     link_hits: dict[str, str] = {}
@@ -564,8 +659,16 @@ def extract_features(
     words = len(re.findall(r"\w+", text))
     if images and not others and words < 25:
         att_hits["image_lure"] = f"{images} image attachment(s), {words} words of text"
+    elif email.inline_images and not others and words < 25:
+        # HTML body that is a picture: the lure text is inside the image, where keyword rules can't read it.
+        key = "image_lure_linked" if email.linked_images else "image_lure_inline"
+        what = "clickable image(s)" if email.linked_images else "inline image(s)"
+        att_hits[key] = f"{email.inline_images} {what} in the HTML body, {words} words of text"
     for name, ev in att_hits.items():
-        add(name, ev)
+        if name.startswith("image_lure_"):
+            add("image_lure", ev, name)
+        else:
+            add(name, ev)
 
     ts = email.timestamp
     if ts.weekday() >= 5 or ts.hour < 7 or ts.hour >= 20:
