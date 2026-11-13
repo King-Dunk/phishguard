@@ -1,0 +1,1744 @@
+{
+ "note": "Real-model hybrid run, 2026-11-14. Public corpora, test split, weights v4 (+ polite-BEC/image rules), threshold 35, model claude-haiku-5-5, benign vote on. Rows hold scores and categories only, no mail content.",
+ "command": "python -m phishguard.dataset.evaluate --dataset external --split --split-part test --modes rules,hybrid --llm-may-lower --llm-sample hard_ham=31,easy_ham=30,nazario_phish=60 --max-llm-api-calls 390 --fpr-ref easy_ham --price-in 0.10 --price-out 0.50 --json",
+ "results": [
+  {
+   "mode": "rules",
+   "dataset": "external:test",
+   "skipped": {
+    "EmlTooLarge": 1
+   },
+   "seed": 42,
+   "n_per_category": 100,
+   "threshold": 35.0,
+   "total": 4682,
+   "confusion": {
+    "tp": 2445,
+    "fp": 26,
+    "tn": 1196,
+    "fn": 1015
+   },
+   "accuracy": 0.7777,
+   "precision": 0.9895,
+   "recall": 0.7066,
+   "f1": 0.8245,
+   "avg_latency_ms": 1.269,
+   "llm_calls": 0,
+   "llm_call_rate": 0.0,
+   "llm_api_calls": 0,
+   "llm_may_lower": true,
+   "llm_lowered": 0,
+   "llm_raised": 0,
+   "llm_api_calls_attempted": 0,
+   "llm_errors": 0,
+   "llm_first_error": "",
+   "llm_skipped_budget": 0,
+   "llm_not_sampled": 0,
+   "llm_sample": {
+    "hard_ham": 31,
+    "easy_ham": 30,
+    "nazario_phish": 60
+   },
+   "llm_cost_usd": null,
+   "llm_reviewed": null,
+   "tokens": {
+    "input": 0,
+    "output": 0
+   },
+   "cost_per_1k_usd": 0.0,
+   "recall_at_fpr": {
+    "1%": {
+     "threshold": 33.700001,
+     "precision": 0.9894779441521652,
+     "recall": 0.7066473988439307,
+     "f1": 0.8244815376833586,
+     "fpr": 0.02127659574468085,
+     "fpr_by_category": {
+      "easy_ham": 0.007785467128027681,
+      "hard_ham": 0.25757575757575757
+     },
+     "target_fpr": 0.01,
+     "fpr_reference": "easy_ham"
+    },
+    "5%": {
+     "threshold": 23.500001,
+     "precision": 0.9684782608695652,
+     "recall": 0.772543352601156,
+     "f1": 0.8594855305466238,
+     "fpr": 0.07119476268412439,
+     "fpr_by_category": {
+      "easy_ham": 0.04844290657439446,
+      "hard_ham": 0.4696969696969697
+     },
+     "target_fpr": 0.05,
+     "fpr_reference": "easy_ham"
+    }
+   },
+   "sweep": [
+    {
+     "threshold": 30.0,
+     "precision": 0.9796466973886329,
+     "recall": 0.7372832369942196,
+     "f1": 0.8413588390501319,
+     "fpr": 0.04337152209492635,
+     "fpr_by_category": {
+      "easy_ham": 0.023356401384083045,
+      "hard_ham": 0.3939393939393939
+     }
+    },
+    {
+     "threshold": 35.0,
+     "precision": 0.9894779441521652,
+     "recall": 0.7066473988439307,
+     "f1": 0.8244815376833586,
+     "fpr": 0.02127659574468085,
+     "fpr_by_category": {
+      "easy_ham": 0.007785467128027681,
+      "hard_ham": 0.25757575757575757
+     }
+    },
+    {
+     "threshold": 40.0,
+     "precision": 0.9923526765632029,
+     "recall": 0.6375722543352601,
+     "f1": 0.7763505190920289,
+     "fpr": 0.013911620294599018,
+     "fpr_by_category": {
+      "easy_ham": 0.005190311418685121,
+      "hard_ham": 0.16666666666666666
+     }
+    },
+    {
+     "threshold": 45.0,
+     "precision": 0.994231777661248,
+     "recall": 0.5479768786127167,
+     "f1": 0.7065399664617105,
+     "fpr": 0.00900163666121113,
+     "fpr_by_category": {
+      "easy_ham": 0.0025951557093425604,
+      "hard_ham": 0.12121212121212122
+     }
+    },
+    {
+     "threshold": 50.0,
+     "precision": 0.9946914399469144,
+     "recall": 0.43323699421965317,
+     "f1": 0.6035836521038856,
+     "fpr": 0.006546644844517185,
+     "fpr_by_category": {
+      "easy_ham": 0.0008650519031141869,
+      "hard_ham": 0.10606060606060606
+     }
+    },
+    {
+     "threshold": 55.0,
+     "precision": 0.9956709956709957,
+     "recall": 0.3988439306358382,
+     "f1": 0.5695418902187371,
+     "fpr": 0.004909983633387889,
+     "fpr_by_category": {
+      "easy_ham": 0.0,
+      "hard_ham": 0.09090909090909091
+     }
+    },
+    {
+     "threshold": 60.0,
+     "precision": 0.9964253798033958,
+     "recall": 0.3222543352601156,
+     "f1": 0.48700589648394843,
+     "fpr": 0.0032733224222585926,
+     "fpr_by_category": {
+      "easy_ham": 0.0,
+      "hard_ham": 0.06060606060606061
+     }
+    }
+   ],
+   "per_category": {
+    "easy_ham": {
+     "tp": 0,
+     "fp": 9,
+     "tn": 1147,
+     "fn": 0,
+     "recall": null,
+     "false_positive_rate": 0.0078
+    },
+    "hard_ham": {
+     "tp": 0,
+     "fp": 17,
+     "tn": 49,
+     "fn": 0,
+     "recall": null,
+     "false_positive_rate": 0.2576
+    },
+    "nazario_phish": {
+     "tp": 2445,
+     "fp": 0,
+     "tn": 0,
+     "fn": 1015,
+     "recall": 0.7066,
+     "false_positive_rate": null
+    }
+   }
+  },
+  {
+   "mode": "hybrid",
+   "dataset": "external:test",
+   "skipped": {
+    "EmlTooLarge": 1
+   },
+   "seed": 42,
+   "n_per_category": 100,
+   "threshold": 35.0,
+   "total": 4682,
+   "confusion": {
+    "tp": 2459,
+    "fp": 19,
+    "tn": 1203,
+    "fn": 1001
+   },
+   "accuracy": 0.7821,
+   "precision": 0.9923,
+   "recall": 0.7107,
+   "f1": 0.8282,
+   "avg_latency_ms": 150.555,
+   "llm_calls": 115,
+   "llm_call_rate": 0.0246,
+   "llm_api_calls": 345,
+   "llm_may_lower": true,
+   "llm_lowered": 52,
+   "llm_raised": 59,
+   "llm_api_calls_attempted": 345,
+   "llm_errors": 0,
+   "llm_first_error": "",
+   "llm_skipped_budget": 0,
+   "llm_not_sampled": 1214,
+   "llm_sample": {
+    "hard_ham": 31,
+    "easy_ham": 30,
+    "nazario_phish": 60
+   },
+   "llm_cost_usd": 0.097874,
+   "llm_reviewed": {
+    "mails": 115,
+    "no_parseable_answer": 1,
+    "circuit_breaks": 0,
+    "api_calls_per_mail": 3.0,
+    "latency_s": {
+     "mean": 6.06,
+     "median": 5.8,
+     "max": 13.76
+    },
+    "llm_below_threshold": 56,
+    "rules": {
+     "tp": 45,
+     "fp": 14,
+     "tn": 41,
+     "fn": 15,
+     "per_category": {
+      "easy_ham": {
+       "tp": 0,
+       "fp": 4,
+       "tn": 26,
+       "fn": 0
+      },
+      "hard_ham": {
+       "tp": 0,
+       "fp": 10,
+       "tn": 15,
+       "fn": 0
+      },
+      "nazario_phish": {
+       "tp": 45,
+       "fp": 0,
+       "tn": 0,
+       "fn": 15
+      }
+     }
+    },
+    "hybrid": {
+     "tp": 59,
+     "fp": 7,
+     "tn": 48,
+     "fn": 1,
+     "per_category": {
+      "easy_ham": {
+       "tp": 0,
+       "fp": 2,
+       "tn": 28,
+       "fn": 0
+      },
+      "hard_ham": {
+       "tp": 0,
+       "fp": 5,
+       "tn": 20,
+       "fn": 0
+      },
+      "nazario_phish": {
+       "tp": 59,
+       "fp": 0,
+       "tn": 0,
+       "fn": 1
+      }
+     }
+    },
+    "hybrid_raise_only": {
+     "tp": 59,
+     "fp": 14,
+     "tn": 41,
+     "fn": 1,
+     "per_category": {
+      "easy_ham": {
+       "tp": 0,
+       "fp": 4,
+       "tn": 26,
+       "fn": 0
+      },
+      "hard_ham": {
+       "tp": 0,
+       "fp": 10,
+       "tn": 15,
+       "fn": 0
+      },
+      "nazario_phish": {
+       "tp": 59,
+       "fp": 0,
+       "tn": 0,
+       "fn": 1
+      }
+     }
+    },
+    "llm_alone": {
+     "tp": 58,
+     "fp": 0,
+     "tn": 55,
+     "fn": 1,
+     "per_category": {
+      "easy_ham": {
+       "tp": 0,
+       "fp": 0,
+       "tn": 30,
+       "fn": 0
+      },
+      "hard_ham": {
+       "tp": 0,
+       "fp": 0,
+       "tn": 25,
+       "fn": 0
+      },
+      "nazario_phish": {
+       "tp": 58,
+       "fp": 0,
+       "tn": 0,
+       "fn": 1
+      }
+     }
+    },
+    "rows": [
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 30.7,
+      "llm_risk": 5.0,
+      "final_risk": 30.0,
+      "raise_only_risk": 30.7,
+      "content_floor": 30.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 20.8,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 20.8,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 4.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 40.6,
+      "llm_risk": 8.0,
+      "final_risk": 40.0,
+      "raise_only_risk": 40.6,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 27.1,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 27.1,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 20.8,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 20.8,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 20.8,
+      "llm_risk": 4.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 20.8,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 23.2,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 23.2,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 33.7,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 33.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 40.8,
+      "llm_risk": 12.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 40.8,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 23.5,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 23.5,
+      "content_floor": 16.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 4.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 48.8,
+      "llm_risk": 8.0,
+      "final_risk": 43.8,
+      "raise_only_risk": 48.8,
+      "content_floor": 43.8,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 20.8,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 20.8,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 20.8,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 20.8,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 35.7,
+      "llm_risk": 12.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 35.7,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 27.1,
+      "llm_risk": 8.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 27.1,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 5.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 27.1,
+      "llm_risk": 5.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 27.1,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 27.1,
+      "llm_risk": 8.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 27.1,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 8.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "easy_ham",
+      "label": 0,
+      "rule_risk": 27.1,
+      "llm_risk": 8.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 27.1,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 20.8,
+      "llm_risk": 25.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.0,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 12.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 33.5,
+      "llm_risk": 12.0,
+      "final_risk": 32.8,
+      "raise_only_risk": 33.5,
+      "content_floor": 32.8,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 40.8,
+      "llm_risk": 18.0,
+      "final_risk": 40.8,
+      "raise_only_risk": 40.8,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 30.0,
+      "final_risk": 30.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 8.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 15.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 15.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 12.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 15.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 27.1,
+      "llm_risk": 8.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 27.1,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 40.8,
+      "llm_risk": 18.0,
+      "final_risk": 40.8,
+      "raise_only_risk": 40.8,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 25.8,
+      "llm_risk": 18.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.8,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 31.7,
+      "llm_risk": 8.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 31.7,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 35.7,
+      "llm_risk": 15.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 35.7,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 35.7,
+      "llm_risk": 30.0,
+      "final_risk": 30.0,
+      "raise_only_risk": 35.7,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 35.7,
+      "llm_risk": 30.0,
+      "final_risk": 30.0,
+      "raise_only_risk": 35.7,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 35.7,
+      "llm_risk": 30.0,
+      "final_risk": 30.0,
+      "raise_only_risk": 35.7,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 35.7,
+      "llm_risk": 8.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 35.7,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 30.7,
+      "llm_risk": 8.0,
+      "final_risk": 30.0,
+      "raise_only_risk": 30.7,
+      "content_floor": 30.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 47.0,
+      "llm_risk": 15.0,
+      "final_risk": 40.0,
+      "raise_only_risk": 47.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 27.1,
+      "llm_risk": 15.0,
+      "final_risk": 20.0,
+      "raise_only_risk": 27.1,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 40.6,
+      "llm_risk": 8.0,
+      "final_risk": 40.0,
+      "raise_only_risk": 40.6,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 37.6,
+      "llm_risk": 30.0,
+      "final_risk": 37.0,
+      "raise_only_risk": 37.6,
+      "content_floor": 37.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "hard_ham",
+      "label": 0,
+      "rule_risk": 30.7,
+      "llm_risk": 25.0,
+      "final_risk": 30.0,
+      "raise_only_risk": 30.7,
+      "content_floor": 30.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 25.8,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 25.8,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 25.8,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 20.8,
+      "llm_risk": 93.0,
+      "final_risk": 93.0,
+      "raise_only_risk": 93.0,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 31.7,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 44.3,
+      "llm_risk": 82.0,
+      "final_risk": 82.0,
+      "raise_only_risk": 82.0,
+      "content_floor": 43.8,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 20.8,
+      "llm_risk": 95.0,
+      "final_risk": 95.0,
+      "raise_only_risk": 95.0,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 35.7,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.8,
+      "llm_risk": 93.0,
+      "final_risk": 93.0,
+      "raise_only_risk": 93.0,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 35.7,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 20.8,
+      "llm_risk": 93.0,
+      "final_risk": 93.0,
+      "raise_only_risk": 93.0,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 48.5,
+      "llm_risk": null,
+      "final_risk": 48.5,
+      "raise_only_risk": 48.5,
+      "content_floor": 48.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.8,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.0,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.2,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.2,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.8,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.2,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 31.0,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 31.0,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 35.0,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 25.0,
+      "llm_risk": 15.0,
+      "final_risk": 25.0,
+      "raise_only_risk": 25.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 27.1,
+      "llm_risk": 70.0,
+      "final_risk": 70.0,
+      "raise_only_risk": 70.0,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.4,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 49.9,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 49.9,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 40.0,
+      "steps": 4,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 49.9,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 35.7,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 95.0,
+      "final_risk": 95.0,
+      "raise_only_risk": 95.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 49.9,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 45.0,
+      "steps": 2,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 31.7,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 49.9,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 49.9,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 48.5,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 20.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.6,
+      "llm_risk": 80.0,
+      "final_risk": 80.0,
+      "raise_only_risk": 80.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 35.7,
+      "llm_risk": 88.0,
+      "final_risk": 88.0,
+      "raise_only_risk": 88.0,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.6,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.4,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.4,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.4,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 49.9,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 45.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 25.8,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.8,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.4,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.6,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 40.8,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 0.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 42.6,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 37.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 25.8,
+      "llm_risk": 95.0,
+      "final_risk": 95.0,
+      "raise_only_risk": 95.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 45.4,
+      "llm_risk": 90.0,
+      "final_risk": 90.0,
+      "raise_only_risk": 90.0,
+      "content_floor": 40.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 35.7,
+      "llm_risk": 85.0,
+      "final_risk": 85.0,
+      "raise_only_risk": 85.0,
+      "content_floor": 35.0,
+      "steps": 3,
+      "circuit_break": null
+     },
+     {
+      "category": "nazario_phish",
+      "label": 1,
+      "rule_risk": 25.8,
+      "llm_risk": 92.0,
+      "final_risk": 92.0,
+      "raise_only_risk": 92.0,
+      "content_floor": 25.0,
+      "steps": 3,
+      "circuit_break": null
+     }
+    ]
+   },
+   "tokens": {
+    "input": 538862,
+    "output": 87976
+   },
+   "cost_per_1k_usd": 0.0209,
+   "recall_at_fpr": {
+    "1%": {
+     "threshold": 31.700001,
+     "precision": 0.9903381642512077,
+     "recall": 0.7109826589595376,
+     "f1": 0.8277254374158816,
+     "fpr": 0.019639934533551555,
+     "fpr_by_category": {
+      "easy_ham": 0.009515570934256055,
+      "hard_ham": 0.19696969696969696
+     },
+     "target_fpr": 0.01,
+     "fpr_reference": "easy_ham"
+    },
+    "5%": {
+     "threshold": 20.800001,
+     "precision": 0.9703864210906464,
+     "recall": 0.7765895953757226,
+     "f1": 0.8627388023759833,
+     "fpr": 0.06710310965630115,
+     "fpr_by_category": {
+      "easy_ham": 0.04671280276816609,
+      "hard_ham": 0.42424242424242425
+     },
+     "target_fpr": 0.05,
+     "fpr_reference": "easy_ham"
+    }
+   },
+   "sweep": [
+    {
+     "threshold": 30.0,
+     "precision": 0.985,
+     "recall": 0.7401734104046243,
+     "f1": 0.845214521452145,
+     "fpr": 0.031914893617021274,
+     "fpr_by_category": {
+      "easy_ham": 0.01730103806228374,
+      "hard_ham": 0.2878787878787879
+     }
+    },
+    {
+     "threshold": 35.0,
+     "precision": 0.9923325262308313,
+     "recall": 0.7106936416184971,
+     "f1": 0.8282249915796565,
+     "fpr": 0.015548281505728314,
+     "fpr_by_category": {
+      "easy_ham": 0.006055363321799308,
+      "hard_ham": 0.18181818181818182
+     }
+    },
+    {
+     "threshold": 40.0,
+     "precision": 0.9928635147190009,
+     "recall": 0.6433526011560694,
+     "f1": 0.7807786741494213,
+     "fpr": 0.01309328968903437,
+     "fpr_by_category": {
+      "easy_ham": 0.004325259515570935,
+      "hard_ham": 0.16666666666666666
+     }
+    },
+    {
+     "threshold": 45.0,
+     "precision": 0.9953608247422681,
+     "recall": 0.5580924855491329,
+     "f1": 0.7151851851851851,
+     "fpr": 0.007364975450081833,
+     "fpr_by_category": {
+      "easy_ham": 0.0017301038062283738,
+      "hard_ham": 0.10606060606060606
+     }
+    },
+    {
+     "threshold": 50.0,
+     "precision": 0.994888178913738,
+     "recall": 0.45,
+     "f1": 0.6197014925373134,
+     "fpr": 0.006546644844517185,
+     "fpr_by_category": {
+      "easy_ham": 0.0008650519031141869,
+      "hard_ham": 0.10606060606060606
+     }
+    },
+    {
+     "threshold": 55.0,
+     "precision": 0.9958448753462604,
+     "recall": 0.41560693641618496,
+     "f1": 0.5864600326264274,
+     "fpr": 0.004909983633387889,
+     "fpr_by_category": {
+      "easy_ham": 0.0,
+      "hard_ham": 0.09090909090909091
+     }
+    },
+    {
+     "threshold": 60.0,
+     "precision": 0.9966015293118097,
+     "recall": 0.33901734104046244,
+     "f1": 0.5059305585507872,
+     "fpr": 0.0032733224222585926,
+     "fpr_by_category": {
+      "easy_ham": 0.0,
+      "hard_ham": 0.06060606060606061
+     }
+    }
+   ],
+   "per_category": {
+    "easy_ham": {
+     "tp": 0,
+     "fp": 7,
+     "tn": 1149,
+     "fn": 0,
+     "recall": null,
+     "false_positive_rate": 0.0061
+    },
+    "hard_ham": {
+     "tp": 0,
+     "fp": 12,
+     "tn": 54,
+     "fn": 0,
+     "recall": null,
+     "false_positive_rate": 0.1818
+    },
+    "nazario_phish": {
+     "tp": 2459,
+     "fp": 0,
+     "tn": 0,
+     "fn": 1001,
+     "recall": 0.7107,
+     "false_positive_rate": null
+    }
+   }
+  }
+ ]
+}
