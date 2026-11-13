@@ -7,12 +7,14 @@ from .base import LLMClient, LLMResponse, MissingAPIKeyError, ToolCall
 
 
 class AnthropicLLM(LLMClient):
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, max_retries: int | None = None):
         if not settings.api_key:
             raise MissingAPIKeyError("ANTHROPIC_API_KEY is not set in the environment")
         import anthropic  # lazy: mock mode never imports the SDK
 
-        self._client = anthropic.Anthropic(api_key=settings.api_key)
+        # max_retries=0 makes one complete() exactly one HTTP request (needed for a hard call budget)
+        kw = {} if max_retries is None else {"max_retries": max_retries}
+        self._client = anthropic.Anthropic(api_key=settings.api_key, **kw)
         self._model = settings.model
 
     def complete(self, *, system, messages, tools, max_tokens) -> LLMResponse:
