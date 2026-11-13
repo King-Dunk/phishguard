@@ -9,6 +9,7 @@ Uses the same settings as the API (PHISHGUARD_* environment variables):
 PHISHGUARD_LLM_MODE=mock (default, offline) or anthropic, PHISHGUARD_THRESHOLD,
 PHISHGUARD_TRUSTED_DOMAINS, PHISHGUARD_EXECUTIVES, PHISHGUARD_AUTHSERV_ID.
 """
+
 from __future__ import annotations
 
 import argparse
