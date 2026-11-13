@@ -144,6 +144,7 @@ class InProcessTarget:
             db_path=self.db,
             rate_limit_per_minute=100_000,
             mfa_lockout_threshold=5,
+            llm_may_lower=True,  # worst case for the benign-vote path: on, with a compromised model
         )
         self.channel = CaptureChannel()
         self.app = create_app(settings, llm=CompromisedLLM(), channel=self.channel)
@@ -242,8 +243,55 @@ def _expect_common(c: Ctx, r: Resp) -> None:
             c.check("keys", set(exp["keys_all"]) <= keys, f"want all of {exp['keys_all']}; got {sorted(keys)}")
         if "keys_none" in exp:
             c.check("no_keys", not keys & set(exp["keys_none"]), f"must not fire {exp['keys_none']}")
+        _check_llm_floor(c, body)
+        if exp.get("not_lowered"):
+            c.check("not_lowered", body.get("lowered_by_llm") is False and c.risk == body.get("rule_risk"), _lf(body))
+        if exp.get("lowered"):  # documents an accepted limit: the vote did apply here
+            c.check("lowered_as_documented", body.get("lowered_by_llm") is True, _lf(body))
     for h in exp.get("no_header", []):
         c.check(f"no_{h}", h.lower() not in r.headers, f"header {h} present")
+
+
+# Benign-vote invariant, recomputed here from the response instead of trusting agent.py's own numbers.
+LOWER_BAND = (20.0, 50.0)
+ROUTING_CONTEXT = {
+    "reply_to_mismatch",
+    "reply_to_mismatch_list",
+    "return_path_mismatch",
+    "no_authentication",
+    "off_hours_send",
+    "moderate_reputation",
+    "young_domain",
+}
+NO_VOTE_FEATURES = {"prompt_injection_attempt", "hidden_html_text", "obfuscated_text"}
+
+
+def _lf(body: dict) -> str:
+    return f"risk {body.get('risk_percent')} rules {body.get('rule_risk')} llm {body.get('llm_risk')}"
+
+
+def _check_llm_floor(c: Ctx, body: dict) -> None:
+    """Whatever the model answered, the final score respects the band, the floor and the vetoes."""
+    rule = body.get("rule_risk")
+    if rule is None:  # http mode against an older server
+        return
+    risk, feats = body["risk_percent"], body.get("features", [])
+    miss = 1.0
+    for f in feats:
+        if f.get("key", f["name"]) not in ROUTING_CONTEXT:
+            miss *= 1.0 - float(f["weight"])
+    floor = round(100 * (1 - miss), 1)
+    problems = []
+    if risk < rule:
+        if not LOWER_BAND[0] <= rule <= LOWER_BAND[1]:
+            problems.append("lowered outside the band")
+        if risk < LOWER_BAND[0]:
+            problems.append("below the band")
+        if risk < floor:
+            problems.append(f"below the content-only floor {floor}")
+        if any(f["name"] in NO_VOTE_FEATURES for f in feats):
+            problems.append("lowered despite a veto feature")
+    c.check("llm_floor", not problems, f"{'; '.join(problems)} ({_lf(body)})")
 
 
 def sc_eml(c: Ctx) -> None:
@@ -883,6 +931,7 @@ CATEGORY_NAMES = {
     "privilege": "b) Privilege escalation / MFA bypass",
     "injection": "c) Injection & DoS (SQL, path, size, headers, Unicode)",
     "evasion": "d) Detection evasion",
+    "benign_vote": 'e) LLM benign-vote abuse (compromised model votes "safe")',
 }
 
 

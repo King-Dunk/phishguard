@@ -20,6 +20,12 @@ Metrics: accuracy/precision/recall/F1 at --threshold (default 35, see config.DEF
 recall at a fixed false-positive rate (1% and 5%; class-ratio independent) and --sweep for a
 threshold table (30-60, step 5). With --fpr-ref easy_ham the FPR is measured on easy_ham only.
 
+Real-model runs on a budget: --max-llm-api-calls N is a hard cap on model requests (one mail takes
+several: tool calls, then the answer); --llm-sample "hard_ham=31,easy_ham=30" sends only a fixed
+content-hash sample of the gray-zone mails of each category to the model (the rest keep their rule
+score); --split-part test evaluates one side of the split. The "LLM-reviewed mails" table then
+compares rules and hybrid on exactly the mails the model saw.
+
 llm/hybrid run only when ANTHROPIC_API_KEY is set (or an LLMClient is injected, as tests do).
 Prices are inputs, not hard-coded: pass current list prices to get a cost column.
 """
@@ -27,18 +33,54 @@ Prices are inputs, not hard-coded: pass current list prices to get a cost column
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import statistics
 import time
 
 from ..agent import PhishingAgent
 from ..config import DEFAULT_THRESHOLD, Settings
-from ..llm.base import LLMClient
+from ..llm.base import LLMClient, LLMResponse
 from ..readonly import DetectionContext, analyze_email
 from .generator import CATEGORIES, EXECUTIVES, TRUSTED_DOMAINS, generate_dataset
 from .metrics import Scored, recall_at_fpr, sweep
 
 MODES = ("rules", "llm", "hybrid")
+
+
+class LLMBudgetExhausted(RuntimeError):
+    pass
+
+
+class BudgetedLLM(LLMClient):
+    """Hard cap on model requests. The count goes up before the request is sent, so a failed or
+    interrupted request still counts, and request number max_calls + 1 is never made."""
+
+    def __init__(self, inner: LLMClient, max_calls: int | None):
+        self.inner, self.max_calls, self.calls = inner, max_calls, 0
+
+    def complete(self, **kw) -> LLMResponse:
+        if self.max_calls is not None and self.calls >= self.max_calls:
+            raise LLMBudgetExhausted(f"LLM call budget of {self.max_calls} requests is used up")
+        self.calls += 1
+        return self.inner.complete(**kw)
+
+
+def _sample_key(email) -> str:
+    raw = f"llm-sample|{email.sender_email}|{email.subject}|{email.body[:4000]}".encode("utf-8", "replace")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _confusion(rows: list[tuple[float, int, str]], threshold: float) -> dict:
+    """rows: (risk, label, category) -> totals and per-category counts at `threshold`."""
+    out: dict = {"tp": 0, "fp": 0, "tn": 0, "fn": 0, "per_category": {}}
+    for risk, label, cat in rows:
+        pred = risk >= threshold
+        key = ("tp" if pred else "fn") if label else ("fp" if pred else "tn")
+        out[key] += 1
+        out["per_category"].setdefault(cat, {"tp": 0, "fp": 0, "tn": 0, "fn": 0})[key] += 1
+    return out
 
 
 def _div(a: float, b: float) -> float | None:
@@ -60,6 +102,9 @@ def evaluate(
     split: str | None = None,
     weights=None,
     fpr_ref: str | None = None,
+    llm_may_lower: bool = False,
+    llm_sample: dict[str, int] | None = None,
+    max_llm_api_calls: int | None = None,
 ) -> dict:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
@@ -83,22 +128,67 @@ def evaluate(
         if llm is None:
             from ..llm.anthropic_client import AnthropicLLM  # lazy: rules mode never imports the SDK
 
-            llm = AnthropicLLM(Settings.from_env())
-        agent = PhishingAgent(llm, Settings(), ctx)
+            # no SDK retries when a budget is set: one complete() must be exactly one request
+            llm = AnthropicLLM(Settings.from_env(), max_retries=0 if max_llm_api_calls is not None else None)
+        llm = BudgetedLLM(llm, max_llm_api_calls)
+        agent = PhishingAgent(llm, Settings(llm_may_lower=llm_may_lower), ctx)
 
-    tp = fp = tn = fn = calls = in_tok = out_tok = 0
+    tp = fp = tn = fn = calls = in_tok = out_tok = lowered = raised = steps = 0
+    errors = skipped_budget = not_sampled = 0
+    first_error = ""
     scored: list[Scored] = []
     latency = 0.0
+    llm_seconds: list[float] = []
+    reviewed: list[dict] = []  # one row per mail the model actually answered for
     per_cat = {c: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for c in categories}
-    for it in data:
+
+    rule_risks = [analyze_email(it.email, ctx)[0] for it in data] if agent and llm_sample is not None else None
+    chosen: set[int] | None = None
+    if rule_risks is not None:
+        # fixed sample: per category, the gray-zone mails with the smallest content hashes
+        by_cat: dict[str, list[tuple[str, int]]] = {}
+        for i, (it, r0) in enumerate(zip(data, rule_risks, strict=True)):
+            if mode == "llm" or gray_zone[0] <= r0 <= gray_zone[1]:
+                by_cat.setdefault(it.category, []).append((_sample_key(it.email), i))
+        chosen = {i for cat, lst in by_cat.items() for _, i in sorted(lst)[: max(0, llm_sample.get(cat, 0))]}
+
+    for i, it in enumerate(data):
         t0 = time.perf_counter()
         risk, _ = analyze_email(it.email, ctx)
         if agent and (mode == "llm" or gray_zone[0] <= risk <= gray_zone[1]):
-            r = agent.analyze(it.email)
-            risk = r.risk_percent
-            calls += 1
-            in_tok += r.input_tokens
-            out_tok += r.output_tokens
+            if chosen is not None and i not in chosen:
+                not_sampled += 1
+            else:
+                rule_risk = risk
+                try:
+                    r = agent.analyze(it.email)
+                except LLMBudgetExhausted:
+                    skipped_budget += 1
+                except Exception as e:  # an API error on one mail must not lose the whole run
+                    errors += 1
+                    first_error = first_error or f"{type(e).__name__}: {e}"[:300]
+                else:
+                    risk = r.risk_percent
+                    calls += 1
+                    steps += r.steps_used
+                    in_tok += r.input_tokens
+                    out_tok += r.output_tokens
+                    lowered += r.lowered_by_llm
+                    raised += r.risk_percent > r.rule_risk
+                    llm_seconds.append(time.perf_counter() - t0)
+                    reviewed.append(
+                        {
+                            "category": it.category,
+                            "label": it.label,
+                            "rule_risk": rule_risk,
+                            "llm_risk": r.llm_risk,
+                            "final_risk": r.risk_percent,
+                            "raise_only_risk": rule_risk if r.llm_risk is None else max(rule_risk, r.llm_risk),
+                            "content_floor": r.content_floor,
+                            "steps": r.steps_used,
+                            "circuit_break": r.circuit_break,
+                        }
+                    )
         latency += time.perf_counter() - t0
         scored.append(Scored(risk, it.label, it.category))
         pred = risk >= threshold
@@ -134,6 +224,22 @@ def evaluate(
         "avg_latency_ms": round(latency / total * 1000, 3),
         "llm_calls": calls,
         "llm_call_rate": _div(calls, total),
+        "llm_api_calls": steps,  # model requests (an analyzed mail takes several: tool calls, then the answer)
+        "llm_may_lower": llm_may_lower,
+        "llm_lowered": lowered,
+        "llm_raised": raised,
+        "llm_api_calls_attempted": llm.calls if agent else 0,  # includes failed and budget-cut mails
+        "llm_errors": errors,
+        "llm_first_error": first_error,
+        "llm_skipped_budget": skipped_budget,
+        "llm_not_sampled": not_sampled,
+        "llm_sample": llm_sample,
+        "llm_cost_usd": (
+            round((in_tok * price_in + out_tok * price_out) / 1e6, 6)
+            if agent and price_in is not None and price_out is not None
+            else None
+        ),
+        "llm_reviewed": _reviewed_summary(reviewed, llm_seconds, threshold) if agent else None,
         "tokens": {"input": in_tok, "output": out_tok},
         "cost_per_1k_usd": cost,
         "recall_at_fpr": {f"{int(t * 100)}%": recall_at_fpr(scored, t, fpr_ref) for t in (0.01, 0.05)},
@@ -147,6 +253,57 @@ def evaluate(
             for c, v in per_cat.items()
         },
     }
+
+
+def _reviewed_summary(rows: list[dict], seconds: list[float], threshold: float) -> dict:
+    """Rules vs hybrid on exactly the mails the model answered for (same mails, same threshold)."""
+
+    def conf(field: str) -> dict:
+        return _confusion([(r[field], r["label"], r["category"]) for r in rows], threshold)
+
+    answered = [r for r in rows if r["llm_risk"] is not None]
+    return {
+        "mails": len(rows),
+        "no_parseable_answer": len(rows) - len(answered),
+        "circuit_breaks": sum(r["circuit_break"] is not None for r in rows),
+        "api_calls_per_mail": round(sum(r["steps"] for r in rows) / len(rows), 2) if rows else None,
+        "latency_s": (
+            {
+                "mean": round(statistics.mean(seconds), 2),
+                "median": round(statistics.median(seconds), 2),
+                "max": round(max(seconds), 2),
+            }
+            if seconds
+            else None
+        ),
+        "llm_below_threshold": sum(r["llm_risk"] < threshold for r in answered),
+        "rules": conf("rule_risk"),
+        "hybrid": conf("final_risk"),  # as configured (with or without the benign vote)
+        "hybrid_raise_only": conf("raise_only_risk"),  # same answers, benign vote ignored
+        "llm_alone": _confusion([(r["llm_risk"], r["label"], r["category"]) for r in answered], threshold),
+        "rows": rows,
+    }
+
+
+def reviewed_table(results: list[dict]) -> str:
+    rows = [
+        "| Dataset | Category | LLM-reviewed mails | Scoring | TP | FP | TN | FN |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in results:
+        rv = r.get("llm_reviewed") if not r.get("not_run") else None
+        if not rv or not rv["mails"]:
+            continue
+        names = (("rules", "rules"), ("hybrid", "hybrid (as run)"), ("hybrid_raise_only", "hybrid, raise only"))
+        names += (("llm_alone", "LLM score alone"),)
+        for cat in sorted(rv["rules"]["per_category"]):
+            n = sum(rv["rules"]["per_category"][cat].values())
+            for key, label in names:
+                v = rv[key]["per_category"].get(cat, {"tp": 0, "fp": 0, "tn": 0, "fn": 0})
+                rows.append(
+                    f"| {r['dataset']} | {cat} | {n} | {label} | {v['tp']} | {v['fp']} | {v['tn']} | {v['fn']} |"
+                )
+    return "\n".join(rows)
 
 
 def _pct(x: float | None) -> str:
@@ -207,12 +364,20 @@ def confusion_table(results: list[dict]) -> str:
     return "\n".join(rows)
 
 
-def run_modes(modes: list[str], datasets: tuple[str, ...] = ("synthetic",), split: bool = False, **kw) -> list[dict]:
+def run_modes(
+    modes: list[str],
+    datasets: tuple[str, ...] = ("synthetic",),
+    split: bool = False,
+    split_part: str | None = None,
+    **kw,
+) -> list[dict]:
     """With split=True, external data is reported as two rows: dev (70%) and test (30%).
     Tune on dev; quote only test."""
     out = []
     for ds in datasets:
         parts = ("dev", "test") if split and ds == "external" else (None,)
+        if split_part and parts != (None,):
+            parts = (split_part,)
         for part in parts:
             for m in modes:
                 label = f"{ds}:{part}" if part else ds
@@ -233,6 +398,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--modes", default="rules", help="comma list of rules,llm,hybrid")
     ap.add_argument("--gray-low", type=float, default=20.0)
     ap.add_argument("--gray-high", type=float, default=50.0)
+    ap.add_argument(
+        "--llm-may-lower",
+        action="store_true",
+        help="llm/hybrid: allow the benign vote (band-limited, floored; see agent.lowered_risk)",
+    )
+    ap.add_argument("--split-part", choices=["dev", "test"], default=None, help="with --split: only this side")
+    ap.add_argument("--max-llm-api-calls", type=int, default=None, help="hard cap on model requests per mode and split")
+    ap.add_argument(
+        "--llm-sample",
+        default=None,
+        help='send only a fixed sample of gray-zone mails to the model, per category: "hard_ham=31,easy_ham=30"',
+    )
     ap.add_argument("--price-in", type=float, default=None, help="USD per million input tokens")
     ap.add_argument("--price-out", type=float, default=None, help="USD per million output tokens")
     ap.add_argument("--dataset", choices=["synthetic", "external", "both"], default="synthetic")
@@ -259,6 +436,12 @@ def main(argv: list[str] | None = None) -> None:
         except ExternalDataMissing as e:
             print(f"external dataset not available: {e}")
             raise SystemExit(2) from None
+    llm_sample = None
+    if a.llm_sample:
+        try:
+            llm_sample = {k.strip(): int(v) for k, v in (p.split("=") for p in a.llm_sample.split(","))}
+        except ValueError:
+            ap.error("--llm-sample wants category=count pairs, e.g. hard_ham=31,easy_ham=30")
     weights = None
     if a.weights:
         from ..readonly.features import load_weights
@@ -278,6 +461,10 @@ def main(argv: list[str] | None = None) -> None:
         gray_zone=(a.gray_low, a.gray_high),
         price_in=a.price_in,
         price_out=a.price_out,
+        llm_may_lower=a.llm_may_lower,
+        llm_sample=llm_sample,
+        max_llm_api_calls=a.max_llm_api_calls,
+        split_part=a.split_part,
     )
     if a.json:
         print(json.dumps(results, indent=2))
@@ -285,6 +472,23 @@ def main(argv: list[str] | None = None) -> None:
     print(comparison_table(results))
     print()
     print(confusion_table(results))
+    rt = reviewed_table(results)
+    if rt.count("\n") > 1:
+        print("\nLLM-reviewed mails only (same mails under each scoring):\n")
+        print(rt)
+    for r in results:
+        if not r.get("not_run") and r["mode"] != "rules":
+            rv = r["llm_reviewed"]
+            tok = r["tokens"]
+            print(
+                f"\n{r['dataset']} {r['mode']}: {rv['mails']} mails reviewed, "
+                f"{r['llm_api_calls_attempted']} model requests, tokens in/out {tok['input']}/{tok['output']}, "
+                f"cost ${r['llm_cost_usd']}, latency {rv['latency_s']}, lowered {r['llm_lowered']}, "
+                f"raised {r['llm_raised']}, errors {r['llm_errors']}, budget-skipped {r['llm_skipped_budget']}, "
+                f"not sampled {r['llm_not_sampled']}"
+            )
+            if r["llm_first_error"]:
+                print(f"first error: {r['llm_first_error']}")
     if a.sweep:
         print()
         print(sweep_table(results))

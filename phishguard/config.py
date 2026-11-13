@@ -13,8 +13,8 @@ DEFAULT_MODEL = "claude-haiku-5-5"
 # split (local run, 70/30 content-hash split) 50 caught only 35.0% of phishing while 35 caught 60.8%
 # with easy_ham FPR 1.4% (vs 0.2%) and precision 97.5% (vs 98.7%). The cost is hard_ham (marketing-like
 # legitimate mail): FPR 56.1% vs 21.2%. A missed phish costs more than a flagged newsletter, and the
-# planned hybrid step sends exactly that 20-50 band to an LLM. Weights v4 at 35 (test split): recall
-# 70.4%, easy_ham FPR 0.8%, hard_ham FPR 25.8%. See README "Real data results".
+# planned hybrid step sends exactly that 20-50 band to an LLM. Weights v4 + polite-BEC/image rules at 35
+# (test split, 2026-11-13): recall 70.6%, easy_ham FPR 0.8%, hard_ham FPR 25.8%. See README "Real data results".
 DEFAULT_THRESHOLD = 35.0
 
 
@@ -33,12 +33,11 @@ class Settings:
     max_tokens_per_request: int = 8000  # total token budget per /analyze call
     per_call_max_tokens: int = 1024
     phishing_threshold: float = DEFAULT_THRESHOLD
-    # Hybrid "benign vote" (off by default; DESIGN Q67): the LLM may lower a rule score only inside the
-    # gray zone, by at most llm_max_lower points, never below the zone's floor, and never when a hard
-    # security signal fired. Unmeasured with a real model.
+    # LLM "benign vote" (off by default; DESIGN Q73-Q76). When on, an LLM score below the rule score may
+    # lower it only if the rule score is inside this band, never below the band's lower edge, never
+    # below the content-only floor, and not at all when the mail hides text or addresses the model.
     llm_may_lower: bool = False
     llm_lower_zone: tuple[float, float] = (20.0, 50.0)
-    llm_max_lower: float = 15.0
     mfa_timeout_seconds: int = 120
     mfa_max_attempts: int = 3
     audit_log_path: str | None = None

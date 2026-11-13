@@ -49,6 +49,16 @@ weights:
   # (so the real-corpus numbers are unaffected). Bank-detail changes keep full weight. DESIGN Q42.
   urgency_language_trusted_sender: 0.08
   payment_keywords_trusted_sender: 0.08
+  # Payment redirection (polite BEC): a request for action + money going to a destination named in
+  # the mail (gift-card codes, payroll account change, payee-detail update, "the account below").
+  # Hand-set, then checked on the real-corpus dev split (DESIGN Q69-Q71). Higher from free mail,
+  # damped for authenticated senders on OUR trusted-domain list (same rule as the keyword damping).
+  payment_redirect_request: 0.30
+  payment_redirect_request_freemail: 0.45
+  payment_redirect_request_trusted_sender: 0.10
+  # Free-mail address whose local part carries OUR organisation's name (ap.dept.acme@gmail.com).
+  # Needs trusted domains / company names, so it is inert on the public corpora (FPR unmeasured there).
+  org_name_in_freemail_address: 0.25
   off_hours_send: 0.08
   # --- links -------------------------------------------------------------------------------------
   # The old catch-all "suspicious_link" (any host unrelated to the sender) fired on 82.6% of ham and
@@ -71,6 +81,9 @@ weights:
   archive_attachment: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
   office_legacy_attachment: 0.12 # .doc/.xls/.ppt/.rtf: can carry macros, common in old phish
   image_lure: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
+  # Same idea for an HTML body that is only <img> tags (tracking pixels excluded) and < 25 words.
+  image_lure_inline: 0.20        # picture(s) and almost no text
+  image_lure_linked: 0.35        # the picture is itself a web link (the classic image-only phish)
 
 # Brands commonly impersonated in phishing links, with the registrable domains they really own.
 # Domain knowledge, not fitted to any dataset. A link host fires link_brand_impersonation when one of
