@@ -35,7 +35,7 @@ miss is a quality gap, not a breach, and is fed to `redteam/improve.py`.
 | `bv-context-only-accepted` | benign_vote | ACCEPTED LIMIT: a mail flagged only by routing context (Reply-To elsewhere) is cleared by a compromised model | 20 | pass |
 | `ev-cyrillic-sender` | evasion | Cyrillic homoglyph sender domain (UTF-8 header) | 60 | pass |
 | `ev-punycode-link` | evasion | Punycode look-alike in a link | 67 | pass |
-| `ev-split-words` | evasion | Spaced-out keywords "w i r e  t r a n s f e r" | 77 | pass |
+| `ev-split-words` | evasion | Spaced-out keywords "w i r e  t r a n s f e r" | 73 | pass |
 | `ev-leet` | evasion | Leetspeak "upd@te b@nk det@ils" | 80 | pass |
 | `ev-cyrillic-display-name` | evasion | Cyrillic "Асme Corp Payroll" display name from Gmail | 61 | pass |
 | `ev-image-only` | evasion | Text only in an image ("see attached for payment instructions") | 51 | pass |
@@ -58,12 +58,12 @@ miss is a quality gap, not a breach, and is fed to `redteam/improve.py`.
 | `dos-deep-mime` | injection | 2000 nested multiparts |  | pass |
 | `dos-wide-mime` | injection | 5000 sibling MIME parts |  | pass |
 | `dos-deep-json` | injection | JSON nested 50,000 levels |  | pass |
-| `dos-redos` | injection | Regex backtracking ("account details" + 19k spaces) | 1 | pass |
-| `dos-long-hosts` | injection | 100 links with 2000-char hostnames | 1 | pass |
-| `dos-huge-header` | injection | 500 KB Subject header | 1 | pass |
+| `dos-redos` | injection | Regex backtracking ("account details" + 19k spaces) | 9 | pass |
+| `dos-long-hosts` | injection | 100 links with 2000-char hostnames | 9 | pass |
+| `dos-huge-header` | injection | 500 KB Subject header | 9 | pass |
 | `hdr-crlf-user` | injection | CRLF + Set-Cookie in requested_by |  | pass |
 | `hdr-encoded-subject` | injection | RFC 2047 encoded CRLF + Bcc in Subject | 45 | pass |
-| `hdr-two-from` | injection | Two From addresses (trusted first) | 56 | pass |
+| `hdr-two-from` | injection | Two From addresses (trusted first) | 60 | pass |
 | `uni-rtlo-filename` | injection | RTL override filename invoice‮fdp.exe | 74 | pass |
 | `uni-trailing-invisible` | injection | evil.exe + zero-width / trailing dot | 40 | pass |
 | `uni-surrogate-eml` | injection | Invalid UTF-8 and control characters in raw mail |  | pass |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import ipaddress
 import math
 import pathlib
@@ -11,6 +12,7 @@ import unicodedata
 from dataclasses import asdict, dataclass, field, replace
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -83,8 +85,24 @@ BANK_CHANGE = re.compile(
     r"|change\s+(of\s+)?(our\s+)?(bank|account)"
     r"|更换.{0,6}(账户|账号)|账户.{0,4}变更"
 )
+# Asking the reader to keep something secret. Not legal footers ("this email is confidential") or job alerts
+# ("do not share this email"), which real-inbox testing showed on a fifth of ordinary bulk mail.
 SECRECY = re.compile(
-    r"\b(confidential|don'?t (tell|share|discuss)|do not (tell|share|discuss)|keep this (between|quiet)|discreet)\b|保密|不要告诉"
+    r"\bkeep (this|it|the matter|everything)?\s?(strictly |completely |totally )?(confidential|private|quiet|between us"
+    r"|to yourself)\b"
+    r"|\bkeep this between\b"
+    r"|\bconfidential (acquisition|deal|matter|request|transaction|project|payment|transfer|wire|task|favou?r)\b"
+    r"|\b(don'?t|do not) (tell|discuss|mention)\b"
+    r"|\b(don'?t|do not) share (this|it|the details)? ?with (anyone|others|colleagues|the team|your team|anybody)\b"
+    r"|\bdiscreet\b|保密|不要告诉"
+)
+# Hidden text addressed to a model, filter or reviewer rather than to the human reader.
+HIDDEN_INSTRUCTION = re.compile(
+    r"\b(ignore|disregard|override)\b.{0,40}\b(instructions?|rules?|previous|above)\b"
+    r"|\b(assistant|a\.?i\.?|llm|language model|classifier|scanner|spam filter|security (filter|tool|system)|reviewer"
+    r"|system prompt)\b"
+    r"|\b(classify|mark|treat|label)\b.{0,30}\b(safe|legitimate|benign|not (spam|phishing))\b"
+    r"|\brisk (score|level)\b"
 )
 # A request to act on an account vs merely mentioning a password (mailing lists talk about passwords).
 CREDENTIAL_ACTION = re.compile(
@@ -259,12 +277,20 @@ MAX_HOST = 253  # DNS limit; longer "hosts" are cut so string metrics stay cheap
 NON_WEB_SCHEMES = ("mailto:", "tel:", "sms:", "callto:", "cid:", "mid:", "news:", "sip:")
 
 
+@functools.lru_cache(maxsize=8)
+def _zone(name: str) -> ZoneInfo:
+    return ZoneInfo(name)
+
+
 @dataclass(frozen=True)
 class DetectionContext:
     trusted_domains: tuple[str, ...] = ("acme-corp.com",)
     executives: tuple[str, ...] = ()
     safe_link_domains: tuple[str, ...] = DEFAULT_SAFE_LINK_DOMAINS
     company_names: tuple[str, ...] = ()  # empty: derived from trusted_domains
+    # IANA zone of the people being protected (e.g. "Australia/Brisbane"). "Off hours" means off hours for the
+    # recipient; None keeps the sender's own Date-header offset (the behaviour the corpus numbers were measured with).
+    timezone: str | None = None
     weights: WeightTable | None = field(default=None, compare=False, hash=False)  # None: weights.yaml
 
     @property
@@ -527,7 +553,9 @@ def extract_features(
         add("return_path_mismatch", f"return-path {domain_of(email.return_path)} differs from sender {sdom}")
 
     auth = {"spf": email.spf, "dkim": email.dkim, "dmarc": email.dmarc}
-    fails = [k for k, v in auth.items() if v == "fail"]
+    # DMARC pass means SPF or DKIM passed *aligned with the From domain*; a separate SPF fail then is what
+    # forwarding does (the forwarder's IP isn't in the sender's SPF record), not spoofing.
+    fails = [] if email.dmarc == "pass" else [k for k, v in auth.items() if v == "fail"]
     if fails:
         add("auth_fail", f"failed: {', '.join(fails)}", "auth_fail_multi" if len(fails) >= 2 else None)
     elif all(v == "none" for v in auth.values()):
@@ -559,8 +587,13 @@ def extract_features(
     extra = [clean_filename(a) for a in email.attachments] + [clean_text(lp.text) for lp in email.link_pairs]
     hidden_txt = clean_text(email.hidden_text)
     if len(hidden_txt.strip()) >= 20:
-        add("hidden_html_text", f"{len(hidden_txt)} chars of CSS-hidden text: '{hidden_txt[:60]}'")
-    seen = "\n".join([text, *extra, hidden_txt])
+        # Bulk mail (List-Unsubscribe etc.) hides template blocks routinely; there the signal only keeps full
+        # weight when the hidden text talks to a machine. Phishing in the public corpus is rarely list mail.
+        key = None
+        if email.list_mail and not HIDDEN_INSTRUCTION.search(hidden_txt.lower()):
+            key = "hidden_html_text_bulk"
+        add("hidden_html_text", f"{len(hidden_txt)} chars of CSS-hidden text: '{hidden_txt[:60]}'", key)
+    seen = "\n".join([text, *extra, hidden_txt, clean_text(email.preheader_text)])
     hidden = decoded_blobs(email.body)
     variants = [("", seen), (" (base64-decoded)", hidden), (" (de-obfuscated)", deobfuscate(seen))]
     authenticated = email.dmarc == "pass" or (email.spf == "pass" and email.dkim == "pass")
@@ -712,7 +745,10 @@ def extract_features(
             add(name, ev)
 
     ts = email.timestamp
-    if ts.weekday() >= 5 or ts.hour < 7 or ts.hour >= 20:
+    if ctx.timezone:
+        ts = ts.astimezone(_zone(ctx.timezone))
+    # A BEC signal (the 'boss' writing at night); newsletters and notifications go out around the clock.
+    if not email.list_mail and (ts.weekday() >= 5 or ts.hour < 7 or ts.hour >= 20):
         add("off_hours_send", f"sent {ts.isoformat()}")
     return out
 

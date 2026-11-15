@@ -43,6 +43,7 @@ class Settings:
     audit_log_path: str | None = None
     trusted_domains: tuple[str, ...] = ("acme-corp.com",)
     executives: tuple[str, ...] = ()
+    timezone: str | None = None  # PHISHGUARD_TIMEZONE, e.g. Australia/Brisbane: recipient's zone for off_hours_send
     api_key: str | None = field(default=None, repr=False)
     # --- API hardening ---
     api_keys: tuple[str, ...] = field(default=(), repr=False)  # client keys for X-API-Key
@@ -73,6 +74,7 @@ class Settings:
             audit_log_path=os.environ.get("PHISHGUARD_AUDIT_LOG"),
             trusted_domains=_csv("PHISHGUARD_TRUSTED_DOMAINS", ("acme-corp.com",)),
             executives=tuple(x.strip() for x in os.environ.get("PHISHGUARD_EXECUTIVES", "").split(",") if x.strip()),
+            timezone=_timezone(os.environ.get("PHISHGUARD_TIMEZONE") or None),
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
             api_keys=tuple(k.strip() for k in os.environ.get("PHISHGUARD_API_KEYS", "").split(",") if k.strip()),
             allow_unauthenticated=os.environ.get("PHISHGUARD_ALLOW_NO_AUTH") == "1",
@@ -87,3 +89,17 @@ class Settings:
             mfa=MFAConfig.from_env(),
             payments=PaymentsConfig.from_env(),
         )
+
+
+def _timezone(name: str | None) -> str | None:
+    """Fail at startup on a misspelled zone instead of on the first mail."""
+    if name:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(
+                f"PHISHGUARD_TIMEZONE={name!r} is not an IANA time zone (e.g. Australia/Brisbane)"
+            ) from None
+    return name
