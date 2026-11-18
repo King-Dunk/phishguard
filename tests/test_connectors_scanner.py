@@ -170,6 +170,21 @@ def test_scan_recent_shows_cached_verdicts_instead_of_rescanning(agent):
     assert [v.risk_percent for v in again] == [v.risk_percent for v in first]
 
 
+def test_scan_recent_rescan_replaces_stale_verdicts(agent):
+    c = ListConnector()
+    c.add("m0", make_raw(**PHISH_RAW_KW))
+    s = scanner(c, agent)
+    first = s.scan_recent(1)[0]
+    # simulate a verdict stored by an older rules version
+    s.state.forget(s.key, "m0")
+    s.state.mark_seen(s.key, "m0", first.sha256, {**first.to_dict(), "risk_percent": 1.0, "is_phishing": False})
+    assert s.scan_recent(1)[0].risk_percent == 1.0
+    c.fetches.clear()
+    fresh = s.scan_recent(1, rescan=True)[0]
+    assert not fresh.cached and fresh.risk_percent == first.risk_percent and c.fetches == ["m0"]
+    assert s.scan_recent(1)[0].risk_percent == first.risk_percent  # stored verdict was replaced
+
+
 def test_end_to_end_gmail_incremental_and_idempotent(agent, tmp_path):
     fake = FakeGmail()
     fake.add(make_raw("before start"))

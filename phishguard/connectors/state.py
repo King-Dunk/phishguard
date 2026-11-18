@@ -77,6 +77,10 @@ class CheckpointStore:
         )
         self._q("DELETE FROM retry WHERE mailbox = ? AND msg_id = ?", (mailbox, msg_id))
 
+    def forget(self, mailbox: str, msg_id: str) -> None:
+        """Drop a message's seen row so the next process() downloads and scores it again."""
+        self._q("DELETE FROM seen WHERE mailbox = ? AND msg_id = ?", (mailbox, msg_id))
+
     def verdict(self, mailbox: str, msg_id: str) -> dict[str, Any] | None:
         rows = self._q("SELECT verdict FROM seen WHERE mailbox = ? AND msg_id = ?", (mailbox, msg_id))
         return json.loads(rows[0][0]) if rows else None

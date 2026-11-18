@@ -200,3 +200,15 @@ def test_bad_timezone_fails_at_startup(monkeypatch):
         Settings.from_env()
     monkeypatch.setenv("PHISHGUARD_TIMEZONE", "Australia/Brisbane")
     assert Settings.from_env().timezone == "Australia/Brisbane"
+
+
+def test_overlong_plain_text_url_is_capped_not_fatal():
+    # A real newsletter carried a >2048-char tracking link in text/plain; the whole mail used to be rejected.
+    long_url = "http://l.tracker.example/ls/click?upn=" + "A" * 3000
+    raw = (
+        "From: news@tracker.example\r\nTo: me@example.com\r\nSubject: Weekly\r\n"
+        "Date: Tue, 03 Mar 2026 10:00:00 +0000\r\nContent-Type: text/plain\r\n\r\n"
+        f"Read more: {long_url}\r\n"
+    ).encode()
+    e = parse_eml(raw)
+    assert e.links and len(e.links[0]) == 2048 and e.links[0].startswith("http://l.tracker.example/")

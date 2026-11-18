@@ -351,6 +351,7 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
             body += "\n[html part]\n" + html_only
     links = [lp.href for lp in pairs if lp.href.lower().startswith(("http://", "https://"))]
     for u in _URL_RE.findall("\n".join(plain)):
+        u = u[:2048]  # same cap as HTML hrefs; real tracking links can exceed the model's Url limit
         if u not in links:
             links.append(u)
 

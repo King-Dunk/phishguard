@@ -189,12 +189,17 @@ class MailboxScanner:
             self.last_stats = stats
         return out
 
-    def scan_recent(self, n: int) -> list[Verdict]:
-        """The last n messages, newest first. Already-scanned ones are shown from the store, not rescanned."""
+    def scan_recent(self, n: int, rescan: bool = False) -> list[Verdict]:
+        """The last n messages, newest first. Already-scanned ones are shown from the store, not rescanned,
+        unless rescan=True: then every one is downloaded and scored again with the current rules and the
+        stored verdict is replaced (stored verdicts are not tied to a rules version, so after a rules change
+        the cache shows old results). The action sink, if any, runs again for rescanned messages."""
         stats = PollStats()
         out: list[Verdict] = []
         try:
             for ref in self.connector.list_recent(n):
+                if rescan:
+                    self.state.forget(self.key, ref.provider_id)
                 prev = self.state.verdict(self.key, ref.provider_id)
                 if prev is not None and prev.get("status") in ("scanned", "rejected", "error"):
                     out.append(Verdict(**{**prev, "cached": True}))
