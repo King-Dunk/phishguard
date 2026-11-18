@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--provider", choices=PROVIDERS, required=True)
     p.add_argument("--last", type=int, default=20, help="how many recent messages to scan (default 20)")
     p.add_argument("--json", action="store_true", help="one JSON object per line instead of a table")
+    p.add_argument("--rescan", action="store_true", help="score every message again instead of showing stored verdicts")
     p.add_argument("--state", default=None, help="checkpoint DB (default ~/.phishguard/connector_state.db)")
     p.add_argument("--authorize", action="store_true", help="run the one-time sign-in and store a refresh token")
     p.add_argument("--write", action="store_true", help="with --authorize: mint the separate WRITE credential")
@@ -69,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         scanner = build_scanner(args.provider, state_path=args.state)
-        verdicts = scanner.scan_recent(args.last)
+        verdicts = scanner.scan_recent(args.last, rescan=args.rescan)
     except (ConnectorError, SecretError, ValueError) as e:
         print(f"error: {redact(e)}", file=sys.stderr)
         return 2

@@ -319,7 +319,7 @@ How it fits the architecture:
 - Secrets come only from environment variables or files outside the repo (refused if group/world readable). They are redacted from logs, output, the state DB and the audit log, and tests check all of these.
 - Optional push: Gmail via Pub/Sub (Google-signed JWT verified) and Graph change notifications (`validationToken` handshake, `clientState`), served by the worker's own small server, not by `api.py`. A notification only wakes the poller.
 
-**Status: tested against offline fakes only** (`httpx.MockTransport` for Gmail and Graph, a real-socket fake IMAP server over TLS). No real Google, Microsoft or IMAP account was used. See Known limitations.
+**Status:** Gmail has been run read-only against one real personal mailbox (2026-11-14, see "Real mailbox results"); Microsoft Graph and IMAP are still tested only against offline fakes (`httpx.MockTransport`, a real-socket fake IMAP server over TLS). See Known limitations.
 
 ## Evaluation
 
@@ -495,6 +495,40 @@ Same command, same sample sizes and cap, on `main` with weights v4 and the polit
 - The rules row says 2445 caught; a rules-only run of the same split earlier the same day counted 2444. One mail, not investigated (the same one-mail drift was seen on the v4 branch before).
 - The test split has now been looked at several times during this work, so by the rule below these numbers are closer to dev numbers than to a clean held-out estimate.
 
+### Real mailbox results (one personal Gmail inbox)
+
+**What was run (2026-11-14):** `scripts/scan_mailbox.py --provider gmail` with a read-only (`gmail.readonly`) token on the maintainer's own inbox, rules only (`PHISHGUARD_LLM_MODE=mock`, nothing sent to a model), threshold 35. The 200 most recent inbox messages were downloaded and kept locally (one was refused by the parser, 199 scored). They were newsletters and promotions, job alerts, university course notices, receipts and service notifications; none was a phishing mail, so every flag is a false positive.
+
+| Code | Flagged at 35 (of 199) | Median risk |
+|---|---|---|
+| `main` before this change (weights v4) | 188 (94%) | 40.2 |
+| after the fixes below, recipient zone `Australia/Brisbane` | 40 (20%) | 10.0 |
+
+What the 2002-era public corpus could not show, and what changed (DESIGN Q80-Q84):
+
+- **The HTML parser called most of a modern email "hidden".** 185 of 199 mails had over 20 characters of "hidden" text (median about 1,070). Causes: white text on a coloured button or banner (`color:#fff` was treated as invisible regardless of background; 141 mails), `font-size:0` layout wrappers whose children set a real size (43), `visibility:hidden` undone by children (29), and the inbox preview line ("preheader", `display:none`, 106). Visibility now follows CSS inheritance: `display:none`, `opacity:0`, `hidden` and `max-height:0`+`overflow:hidden` hide a subtree for good; `visibility`, `font-size` and `color` can be reset by a descendant; white text counts as hidden only when no ancestor sets a background colour or picture; `aria-hidden` (screen readers only) is ignored. A short hidden line before any visible text (up to 200 characters after invisible padding) is kept as `preheader_text`: not counted as hidden content, still scanned for keywords and prompt injection. Hidden copies of visible text (mobile/desktop versions) no longer count.
+- **Hidden template blocks in bulk mail.** After the parser fix, 91 mails still hid real template blocks, 87 of them list/bulk mail (`List-Unsubscribe` etc.). In list mail `hidden_html_text` now uses the key `hidden_html_text_bulk` (0.10) unless the hidden text addresses a machine ("assistant", "classifier", "ignore ... instructions", "mark as safe", ...), which keeps the full 0.35.
+- **Authentication results.** Gmail writes the ARC chain's claimed results inside a comment (`arc=pass (i=1 spf=pass dkim=pass dmarc=pass)`); the parser read them as Gmail's own verdicts. Comments are now stripped. DKIM is a pass when any signature verifies (one broken extra signature from a mailing service no longer fails the mail), and a DMARC pass suppresses a separate SPF fail, which is what forwarding (here, a university account forwarded to Gmail) causes.
+- **"Secrecy" wording.** `do not share` and a bare `confidential` matched job-alert footers ("do not share this email") and legal disclaimers. The rule now needs a request to keep something secret ("keep this confidential / between us", "don't tell anyone", "confidential acquisition", "do not share this with anyone").
+- **Off hours.** `off_hours_send` was judged in the sender's own Date-header zone, and fired on newsletters sent at night. It is now judged in `PHISHGUARD_TIMEZONE` when set (unset keeps the old behaviour, which the corpus numbers use), and it no longer applies to list mail: it is a BEC signal (a "boss" writing at night), not a property of newsletters.
+
+The cost, measured on the public corpus (rules, threshold 35):
+
+| Public corpus | Version | Recall | Precision | FPR easy_ham | FPR hard_ham |
+|---|---|---|---|---|---|
+| dev split | before | 70.8% (5741/8111) | 98.8% | 0.8% (23/2744) | 26.1% (48/184) |
+| dev split | after | 66.3% (5385/8117) | 99.2% | 0.6% (17/2744) | 15.2% (28/184) |
+| test split | before | 70.6% (2444/3460) | 99.0% | 0.8% (9/1156) | 25.8% (17/66) |
+| test split | after | 66.4% (2293/3454) | 99.1% | 0.6% (7/1156) | 21.2% (14/66) |
+| synthetic (600) | before / after | 93.4% / 93.4% | 100% / 100% | 0 FP / 0 FP | |
+
+Read it for what it is:
+
+- **About four points of corpus recall came from a bug.** The old parser marked 1,008 of 11,571 corpus phishing mails as carrying hidden text; the corrected one marks 137. Most of the difference is visible white-on-colour text, which the corpus rewarded because its legitimate mail is 2002 plain text. That signal meant "modern HTML email", which is also why it flagged 94% of a real 2026 inbox.
+- The phishing totals differ slightly (8,111 → 8,117 dev, 3,460 → 3,454 test) because the split is keyed on parsed content and the parser changed; the test split has now been looked at many times, so it is closer to a dev number than a clean held-out estimate.
+- Of the 40 mails still flagged in the inbox, most sit between 35 and 50: the band that `hybrid` mode sends to the model. The real-model hybrid sample above recovered 59 of 60 gray-zone phishing mails and cleared half of the gray-zone hard_ham, so rules plus hybrid is the intended configuration for a real inbox; that combination has not yet been run on this inbox.
+- One mailbox, one person, one week of mail, no phishing in it: this measures false positives on ordinary mail, not recall on real attacks.
+
 ### Evaluation pitfalls
 
 - **F1 and accuracy depend on the class ratio.** The test split has about 3 phishing per legitimate mail. A classifier that flags *everything* scores precision ~75%, recall 100%, F1 ~86%, which is better than the default operating point's F1, while being useless. Use measures that don't move with the ratio: recall at a fixed false-positive rate (`Recall @1% FPR` / `@5% FPR` columns), per-category FPR, or a class-balanced metric. A real inbox is mostly legitimate, which makes false positives far more frequent per day than this test split suggests.
@@ -605,10 +639,10 @@ With a key, an LLM writes harder attack variants and suggestions. Spending has a
 - Payments are simulated (`SimulatedBank`); the ISO 20022, Stripe, Xero, MYOB and identity-provider adapters are documented stubs with no network calls, never tested against a real provider.
 - API keys are shared service keys, not per-user identity; `requested_by` is still caller-supplied.
 - Rate limits and the SQLite store are per process. Multiple workers or hosts need Redis/Postgres.
-- Detection is rule-based with partly hand-set, partly calibrated weights. On real mail (public corpora, test split, weights v4 plus the polite-BEC and image-lure rules, threshold 35, re-measured 2026-11-13) recall is 70.6% (2444/3460) with easy_ham FPR 0.8% (9/1156) and hard_ham FPR 25.8% (17/66): three in ten phishing mails are still missed and about a quarter of marketing-like legitimate mail is flagged. Open work on this is listed under Roadmap.
+- Detection is rule-based with partly hand-set, partly calibrated weights. On the public corpora (test split, weights v5, threshold 35, 2026-11-14) recall is 66.4% (2293/3454) with easy_ham FPR 0.6% (7/1156) and hard_ham FPR 21.2% (14/66): a third of phishing mails are missed by rules alone. On one real 2026 inbox (199 ordinary mails, no phishing) rules alone still flag 40 (20%), most in the 35-50 band that hybrid mode sends to the model. Open work on this is listed under Roadmap.
 - Polite BEC and image-only lures are covered by rules that have **no real BEC data behind them**: the public corpora hold almost none, so recall on real BEC and the false-positive rate on modern mail are unmeasured. Known misses: a polite payee-detail change from an unknown company domain (risk 30), a first-contact probe with no ask, and any lure whose text is inside an image (there is no OCR; only "picture and almost no text" is detected). `requested_by` is self-asserted, so an attacker with a client key can trigger a victim's operation lockout (availability, not a bypass).
-- No real mail, banking or MFA push integrations; money moves only inside the simulated bank. `scripts/check_email.py` and `/analyze/eml` read files you give them; nothing has been run against a live mailbox.
-- **Mailbox connectors were tested only against offline fakes**, written from the providers' public documentation. They have not been run against a real Gmail, Microsoft 365, Outlook.com or IMAP account, so error codes, paging edge cases and provider quirks (consent screens, NetEase/QQ behavior, Graph moves with immutable IDs) are unverified.
+- No real mail, banking or MFA push integrations; money moves only inside the simulated bank. Gmail scanning has been run read-only against one personal mailbox; nothing has acted on a live mailbox.
+- **Graph and IMAP connectors were tested only against offline fakes**, written from the providers' public documentation; the Gmail connector has read one real personal mailbox (200 messages, incremental paging and a few rate-limit retries observed), but Microsoft 365, Outlook.com and IMAP accounts have not been tried, so error codes, paging edge cases and provider quirks (consent screens, NetEase/QQ behavior, Graph moves with immutable IDs) are unverified.
 - Gmail OAuth apps in "Testing" status get refresh tokens that expire after 7 days, and `gmail.readonly` is a restricted scope (Google verification is needed to publish). Personal use means re-authorizing weekly; Workspace "Internal" apps or a service account avoid this.
 - IMAP has no read-only credential: an app password can do anything. Read-only scanning is enforced in code (`EXAMINE`, `BODY.PEEK[]`, tests), not by the provider.
 - Graph cannot rewrite a received message, so warning banners there are unsupported (use an Exchange transport rule). IMAP "release from quarantine" isn't implemented. Without UIDPLUS, IMAP moves leave the original flagged `\Deleted` rather than risk a plain `EXPUNGE`.

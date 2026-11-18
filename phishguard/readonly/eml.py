@@ -73,12 +73,77 @@ def _header_anomalies(msg: StdMessage) -> list[str]:
     return out
 
 
-_HIDDEN_STYLE = re.compile(
-    r"display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?![.\d]*[1-9])|opacity\s*:\s*0(?![.\d]*[1-9])"
-    r"|max-height\s*:\s*0|color\s*:\s*(#fff(fff)?|white)\b",
-    re.I,
-)
 _VOID = {"br", "img", "hr", "meta", "link", "input", "wbr", "source", "area", "col", "base"}
+_ZERO = re.compile(r"^-?0*\.?0*(px|pt|em|rem|%)?$")
+_WHITE = re.compile(
+    r"^(#fff(fff)?|white|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\)|rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*1(\.0*)?\s*\))$"
+)
+_NO_BG = {"", "none", "transparent", "inherit", "initial", "unset"}
+# Invisible padding that mail templates put after the preheader so the inbox preview stops there.
+_FILLER = re.compile("[͏­​-‍⁠﻿ ]+")
+PREHEADER_MAX = 200  # hidden text before any visible text, up to this many characters, is a preview line
+
+
+def _style(s: str) -> dict[str, str]:
+    """Inline CSS declarations, lower-cased, last one wins (as in a browser), without !important."""
+    out: dict[str, str] = {}
+    for decl in s.split(";"):
+        k, sep, v = decl.partition(":")
+        if sep:
+            out[k.strip().lower()] = v.replace("!important", "").strip().lower()
+    return out
+
+
+class _Vis:
+    """Computed visibility of one element, inherited the way CSS inherits it.
+
+    display:none, opacity:0, the `hidden` attribute and max-height:0 with overflow:hidden hide a subtree for
+    good. visibility, font-size and color are inherited but a descendant can set them back, so a wrapper with
+    font-size:0 (a common email layout trick) does not hide children that set font-size:14px. White text only
+    counts as hidden when no ancestor sets a background: white on a coloured button or banner is visible.
+    `aria-hidden` hides from screen readers, not from the eye, so it is ignored."""
+
+    __slots__ = ("gone", "vis_hidden", "zero_font", "white", "background")
+
+    def __init__(self, gone=False, vis_hidden=False, zero_font=False, white=False, background=False):
+        self.gone, self.vis_hidden, self.zero_font, self.white, self.background = (
+            gone,
+            vis_hidden,
+            zero_font,
+            white,
+            background,
+        )
+
+    def child(self, attrs: dict) -> _Vis:
+        st = _style(attrs.get("style") or "")
+        v = _Vis(self.gone, self.vis_hidden, self.zero_font, self.white, self.background)
+        if (
+            "hidden" in attrs
+            or st.get("display") == "none"
+            or _ZERO.match(st.get("opacity", "1"))
+            or (_ZERO.match(st.get("max-height", "none")) and "hidden" in st.get("overflow", ""))
+        ):
+            v.gone = True
+        if "visibility" in st:
+            v.vis_hidden = st["visibility"].startswith(("hidden", "collapse"))
+        if "font-size" in st:
+            v.zero_font = bool(_ZERO.match(st["font-size"]))
+        if "color" in st:
+            v.white = bool(_WHITE.match(st["color"]))
+        bg = (attrs.get("bgcolor") or "").strip().lower()
+        bg_css = st.get("background-color", st.get("background", ""))
+        if attrs.get("background") or "url(" in st.get("background-image", "") + bg_css:
+            v.background = True  # a background picture: assume the text sits on it
+        elif bg or bg_css not in _NO_BG:
+            v.background = not _WHITE.match(bg or bg_css.split()[0])
+        return v
+
+    @property
+    def hidden(self) -> bool:
+        return self.gone or self.vis_hidden or self.zero_font or (self.white and not self.background)
+
+
+_ROOT = _Vis()
 
 
 class _HTMLText(HTMLParser):
@@ -89,19 +154,23 @@ class _HTMLText(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.text: list[str] = []
         self.hidden: list[str] = []
+        self.preheader: list[str] = []  # hidden text before any visible text (inbox preview line)
+        self._seen_visible = False
         self.links: list[DisplayedLink] = []
         self.images = 0  # visible <img>, not counting 1-2 px tracking pixels
         self.linked_images = 0  # of those, inside an <a href="http...">
         self._href: str | None = None
         self._anchor: list[str] = []
         self._skip = 0
-        self._stack: list[tuple[str, bool]] = []
+        self._stack: list[tuple[str, _Vis]] = []
+
+    def _vis(self) -> _Vis:
+        return self._stack[-1][1] if self._stack else _ROOT
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag not in _VOID and len(self._stack) < 500:
-            hide = "hidden" in a or a.get("aria-hidden") == "true" or bool(_HIDDEN_STYLE.search(a.get("style") or ""))
-            self._stack.append((tag, hide))
+            self._stack.append((tag, self._vis().child(a)))
         if tag in ("script", "style"):
             self._skip += 1
         elif tag == "a":
@@ -109,7 +178,7 @@ class _HTMLText(HTMLParser):
             self._anchor = []
         elif tag in ("br", "p", "div", "tr"):
             self.text.append("\n")
-        elif tag == "img" and not self._skip and not _tiny(a) and not any(h for _, h in self._stack):
+        elif tag == "img" and not self._skip and not _tiny(a) and not self._vis().child(a).hidden:
             self.images += 1
             if self._href is not None and self._href.lower().startswith(("http://", "https://")):
                 self.linked_images += 1
@@ -129,12 +198,21 @@ class _HTMLText(HTMLParser):
     def handle_data(self, data):
         if self._skip:
             return
-        if any(h for _, h in self._stack):
-            self.hidden.append(data)
+        if self._vis().hidden:
+            if not self._seen_visible and len("".join(self.preheader)) + len(data) <= PREHEADER_MAX * 4:
+                self.preheader.append(data)
+            else:
+                self.hidden.append(data)
             return
+        if data.strip():
+            self._seen_visible = True
         self.text.append(data)
         if self._href is not None:
             self._anchor.append(data)
+
+
+def _norm(s: str) -> str:
+    return " ".join(_FILLER.sub(" ", s).split()).lower()
 
 
 def _tiny(attrs: dict) -> bool:
@@ -157,11 +235,32 @@ def parse_auth_results(msg: StdMessage, trusted_authserv_id: str | None = None) 
     elif headers:
         chosen = headers[0]
     out = {"spf": "none", "dkim": "none", "dmarc": "none"}
-    for mech, res in _AUTH_RE.findall(chosen or ""):
-        mech = mech.lower()
-        if out[mech] == "none" or _AUTH_MAP.get(res.lower()) == "fail":  # any failing signature wins
-            out[mech] = _AUTH_MAP.get(res.lower(), "none")
+    # Parenthesised comments are free text: Gmail puts the ARC chain's *claimed* results there
+    # ("arc=pass (i=1 spf=pass dkim=pass dmarc=pass)"), which are not this server's verdicts.
+    text = _strip_comments(chosen or "")
+    dkim_seen: set[str] = set()
+    for mech, res in _AUTH_RE.findall(text):
+        mech, val = mech.lower(), _AUTH_MAP.get(res.lower(), "none")
+        if mech == "dkim":
+            dkim_seen.add(val)
+        elif out[mech] == "none" or val == "fail":  # one SPF/DMARC result; a failing one wins
+            out[mech] = val
+    # DKIM passes if any signature verifies (RFC 6376): an extra broken signature, e.g. from a mailing
+    # service re-signing, is not evidence. Whose signature counts for the From domain is DMARC's job.
+    out["dkim"] = "pass" if "pass" in dkim_seen else "fail" if "fail" in dkim_seen else "none"
     return out
+
+
+def _strip_comments(h: str) -> str:
+    out, depth = [], 0
+    for ch in h[:8000]:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+        elif not depth:
+            out.append(ch)
+    return "".join(out)
 
 
 def _addr(msg: StdMessage, name: str) -> tuple[str, str]:
@@ -205,6 +304,7 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
     plain: list[str] = []
     html_text: list[str] = []
     hidden: list[str] = []
+    preheaders: list[str] = []
     pairs: list[DisplayedLink] = []
     atts: list[Attachment] = []
     images = linked_images = 0
@@ -228,8 +328,17 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
         else:
             p = _HTMLText()
             p.feed(content)
-            html_text.append("".join(p.text))
-            hidden.append(" ".join(p.hidden))
+            visible = "".join(p.text)
+            html_text.append(visible)
+            pre = _norm(" ".join(p.preheader))
+            if len(pre) <= PREHEADER_MAX:
+                preheaders.append(pre)
+                chunks = p.hidden
+            else:  # too long for a preview line: it is hidden text like any other
+                chunks = [pre, *p.hidden]
+            # Responsive templates hide the mobile or desktop copy of what is shown: not hidden content.
+            seen = _norm(visible)
+            hidden.append(" ".join(c for c in map(_norm, chunks) if c and c not in seen))
             pairs.extend(p.links)
             images += p.images
             linked_images += p.linked_images
@@ -242,6 +351,7 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
             body += "\n[html part]\n" + html_only
     links = [lp.href for lp in pairs if lp.href.lower().startswith(("http://", "https://"))]
     for u in _URL_RE.findall("\n".join(plain)):
+        u = u[:2048]  # same cap as HTML hrefs; real tracking links can exceed the model's Url limit
         if u not in links:
             links.append(u)
 
@@ -268,6 +378,7 @@ def _to_email(msg: StdMessage, raw: bytes, trusted_authserv_id: str | None) -> E
         dkim=auth["dkim"],
         dmarc=auth["dmarc"],
         hidden_text=" ".join(" ".join(hidden).split())[:5000],
+        preheader_text=" ".join(" ".join(preheaders).split())[:1000],
         header_anomalies=[a[:200] for a in _header_anomalies(msg)][:10],
         list_mail=is_list_mail(msg),
         inline_images=min(images, 10000),

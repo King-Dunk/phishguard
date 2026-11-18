@@ -6,7 +6,8 @@
 # Evidence for every change since version 1: docs/DESIGN.md, "Real-corpus calibration" (Q31-Q39),
 # based on docs/real_corpus_error_analysis.md (15,721 real messages, aggregates only).
 # Version 4 (false-positive round, dev split only): DESIGN Q63-Q68.
-version: 4
+# Version 5 (real-inbox round): hidden_html_text_bulk; parser and rule fixes in DESIGN Q80-Q84.
+version: 5
 
 weights:
   # --- sender identity -------------------------------------------------------------------
@@ -38,6 +39,7 @@ weights:
   credential_request: 0.25  # calibrated v3 (dev, easy_ham FPR<=1%)
   credential_action: 0.35        # v4: 'verify your account', 'account suspended', ... (not a bare 'password')
   hidden_html_text: 0.35  # calibrated v3 (dev, easy_ham FPR<=1%)
+  hidden_html_text_bulk: 0.10  # v5: hidden template blocks in list/bulk mail (real-inbox test); full weight if the hidden text addresses a machine
   secrecy_request: 0.16  # calibrated v3 (dev, easy_ham FPR<=1%)
   obfuscated_text: 0.25
   urgency_language: 0.25  # calibrated v3 (dev, easy_ham FPR<=1%)

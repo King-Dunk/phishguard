@@ -39,7 +39,7 @@ class PhishingAgent:
     def __init__(self, llm: LLMClient, settings: Settings, ctx: DetectionContext | None = None):
         self.llm = llm
         self.settings = settings
-        self.ctx = ctx or DetectionContext(settings.trusted_domains, settings.executives)
+        self.ctx = ctx or DetectionContext(settings.trusted_domains, settings.executives, timezone=settings.timezone)
 
     def analyze(self, email: EmailMessage) -> AnalysisResult:
         s = self.settings

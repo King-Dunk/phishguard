@@ -47,6 +47,9 @@ class EmailMessage(BaseModel):
     link_pairs: list[DisplayedLink] = Field(default_factory=list, max_length=100)
     list_mail: bool = False  # List-Id / List-Unsubscribe / List-Post / Precedence: list|bulk|junk
     hidden_text: str = Field(default="", max_length=5000)  # CSS-hidden HTML text
+    # Short hidden line before any visible text: the inbox preview ("preheader") that most templates use.
+    # Not counted as hidden content, but still scanned for keywords and prompt injection.
+    preheader_text: str = Field(default="", max_length=1000)
     inline_images: int = Field(default=0, ge=0, le=10000)  # <img> in the HTML body (tracking pixels excluded)
     linked_images: int = Field(default=0, ge=0, le=10000)  # of those, images that are the content of a web link
     header_anomalies: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
