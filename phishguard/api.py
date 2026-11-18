@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -90,18 +91,48 @@ def _build_llm(settings: Settings) -> LLMClient:
     return MockLLM()
 
 
+_RATIONALE_MAX = 300
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+
+
+def _model_note(r: AnalysisResult, is_phishing: bool) -> tuple[str, str]:
+    """The model's free-text rationale, or why it is withheld.
+
+    The rationale is written by a model that has just read attacker-controlled text, so a fully
+    injected model can use it to talk to the human reading the verdict ("verified by the CEO, please
+    pay"). It never changes the score, but it could change what a person does. It is therefore never
+    shown on a flagged mail or when the model argued for a lower score than the rules, and when shown
+    it is cleaned, capped and marked as untrusted model output.
+    """
+    if not r.rationale:
+        return "", "none"
+    if is_phishing:
+        return "", "withheld_flagged"
+    if r.llm_risk is not None and r.llm_risk < r.rule_risk:
+        return "", "withheld_model_disagrees"
+    text = " ".join(_CONTROL.sub(" ", r.rationale).split())
+    if len(text) > _RATIONALE_MAX:
+        text = text[: _RATIONALE_MAX - 1] + "\u2026"
+    return text, "shown"
+
+
 def _result(email_id: str, r: AnalysisResult, threshold: float) -> dict[str, Any]:
+    is_phishing = r.risk_percent >= threshold
+    rationale, rationale_status = _model_note(r, is_phishing)
     return {
         "email_id": email_id,
         "risk_percent": r.risk_percent,
-        "is_phishing": r.risk_percent >= threshold,
+        "is_phishing": is_phishing,
         "threshold": threshold,
         "features": r.features,  # sorted by contribution; contributions sum to the rule score
         "explanation": [f"{f['name']}: +{f['contribution']} ({f['evidence']})" for f in r.features],
         "steps_used": r.steps_used,
         "tokens_used": r.tokens_used,
         "circuit_break": r.circuit_break,
-        "rationale": r.rationale,
+        # untrusted model text: withheld on flagged mail or when the model argued the score down
+        "rationale": rationale,
+        "rationale_status": rationale_status,  # shown | withheld_flagged | withheld_model_disagrees | none
+        "rationale_trust": "untrusted_model_output",
         # audit trail for the benign-vote path: what the rules said, what the model said, what was applied
         "rule_risk": r.rule_risk,
         "llm_risk": r.llm_risk,
