@@ -25,6 +25,7 @@ class LabeledEmail:
     email: EmailMessage
     category: str
     label: int  # 1 = phishing/fraud, 0 = legitimate
+    source: str = ""  # where a real message came from (mbox file, corpus folder); empty for synthetic mail
 
     def to_dict(self) -> dict:
         return {"category": self.category, "label": self.label, "email": self.email.model_dump(mode="json")}

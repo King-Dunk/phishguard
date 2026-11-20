@@ -45,17 +45,17 @@ def load_external(data_dir: str | pathlib.Path | None = None, limit_per_class: i
     ham_root, phish_root = root / "ham", root / "phish"
     if not ham_root.is_dir() or not phish_root.is_dir():
         raise ExternalDataMissing(f"{root} has no ham/ and phish/; run: python scripts/download_datasets.py")
-    raw: list[tuple[bytes, str, int]] = []
+    raw: list[tuple[bytes, str, int, str]] = []
     for p in sorted(ham_root.rglob("*")):
         if p.is_file() and not p.name.startswith(("cmds", ".")):
-            raw.append((p.read_bytes(), _ham_category(p, ham_root), 0))
+            raw.append((p.read_bytes(), _ham_category(p, ham_root), 0, p.relative_to(ham_root).parts[0]))
     for mb in sorted(phish_root.glob("*.mbox")):
         # Use the raw stored bytes: re-serialising with as_bytes() crashes on
         # real-world messages carrying non-ASCII in headers or MIME parts.
         box = mailbox.mbox(str(mb), create=False)
         try:
             for key in box.iterkeys():
-                raw.append((box.get_bytes(key), "nazario_phish", 1))
+                raw.append((box.get_bytes(key), "nazario_phish", 1, mb.stem))
         finally:
             box.close()
     rng = random.Random(seed)
@@ -68,14 +68,14 @@ def load_external(data_dir: str | pathlib.Path | None = None, limit_per_class: i
             rng.shuffle(lst)
             raw += lst[:limit_per_class]
     out = ExternalSet([])
-    for i, (data, cat, label) in enumerate(raw):
+    for i, (data, cat, label, source) in enumerate(raw):
         try:
             email = parse_eml(data)
         except (EmlRejected, ValueError) as e:
             out.skipped[type(e).__name__] = out.skipped.get(type(e).__name__, 0) + 1
             continue
         email = email.model_copy(update={"id": f"{cat}-{i}"})
-        out.items.append(LabeledEmail(email, cat, label))
+        out.items.append(LabeledEmail(email, cat, label, source))
     if not out.items:
         raise ExternalDataMissing(f"no messages parsed under {root}")
     return out
