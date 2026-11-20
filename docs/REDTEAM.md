@@ -4,7 +4,7 @@ The attacks, the invariants checked after each one, what they found, and the hum
 
 ## Results
 
-`redteam/` holds 94 attacks in six YAML files (`payloads/`), a runner, and a Docker sandbox.
+`redteam/` holds 94 attacks in seven YAML files (`payloads/`), a runner, and a Docker sandbox.
 
 ```bash
 python -m redteam.runner                      # in-process, writes redteam/report.md (pytest runs this)
