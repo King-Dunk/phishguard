@@ -169,8 +169,11 @@ def test_answers_normalized_and_never_stored_plaintext():
     kv = KV()
     sq = SecurityQuestionManager(kv)
     sq.enroll("amy", QUESTIONS)
-    raw = json.dumps(kv.get("questions", "amy"))
-    assert "Rex" not in raw and "rex" not in raw and "paulo" not in raw.lower() and "$argon2id$" in raw
+    rec = kv.get("questions", "amy")
+    assert all(e["hash"].startswith("$argon2id$") for e in rec)
+    # The salt and digest are random base64 and can spell "rex" by chance: look for the answers everywhere else.
+    visible = json.dumps([{k: v for k, v in e.items() if k != "hash"} for e in rec]).lower()
+    assert "rex" not in visible and "paulo" not in visible
     assert normalize_answer("  SÃO   Paulo ") == normalize_answer("são paulo") == normalize_answer("Sa\u0303o paulo")
     assert normalize_answer("ＲＥＸ") == "rex"  # fullwidth
     assert normalize_answer("Re​x") == "rex"

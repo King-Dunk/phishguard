@@ -3,74 +3,421 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PhishGuard - passkey approval demo</title>
+<title>PhishGuard Approval Center</title>
+<link rel="icon" href="data:,">
+<!--
+  Local demo of the MFA gateway (served only when the WebAuthn RP ID is "localhost").
+  Deliberately self-contained: no CDN scripts, fonts or styles. This page approves money with a passkey,
+  so it should not execute code from third parties. Colours follow the Tailwind palette
+  (slate / emerald / amber); icons are inline Lucide SVG paths (ISC licence).
+-->
 <style>
-  :root { color-scheme: light dark; --b: #8884; }
-  body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.4rem; margin-bottom: .2rem; }
-  .note { opacity: .75; font-size: .9rem; }
-  fieldset { border: 1px solid var(--b); border-radius: 8px; margin: 1rem 0; padding: .8rem 1rem; }
-  legend { font-weight: 600; padding: 0 .3rem; }
-  label { display: inline-block; min-width: 9rem; }
-  input { font: inherit; padding: .25rem .4rem; margin: .15rem 0; width: 18rem; max-width: 100%; }
-  button { font: inherit; padding: .35rem .8rem; margin: .3rem .3rem .3rem 0; cursor: pointer; }
-  pre { background: #8881; border: 1px solid var(--b); border-radius: 6px; padding: .6rem; white-space: pre-wrap; word-break: break-word; max-height: 22rem; overflow: auto; font-size: .82rem; }
-  .ok { color: #2a7; } .bad { color: #c33; } .warn { color: #b80; }
+  :root {
+    --slate-950: #020617; --slate-900: #0f172a; --slate-800: #1e293b; --slate-700: #334155;
+    --slate-600: #475569; --slate-500: #64748b; --slate-400: #94a3b8; --slate-300: #cbd5e1;
+    --slate-200: #e2e8f0; --slate-100: #f1f5f9;
+    --emerald-300: #6ee7b7; --emerald-400: #34d399; --emerald-500: #10b981; --emerald-600: #059669;
+    --amber-300: #fcd34d; --amber-400: #fbbf24; --amber-500: #f59e0b;
+    --rose-400: #fb7185; --rose-500: #f43f5e; --sky-400: #38bdf8;
+    --radius: 16px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(16,185,129,.08), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(56,189,248,.05), transparent 60%),
+      var(--slate-950);
+    color: var(--slate-200);
+    font: 14px/1.5 Inter, Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 2;
+          stroke-linecap: round; stroke-linejoin: round; }
+  svg.i.sm { width: 14px; height: 14px; } svg.i.lg { width: 22px; height: 22px; } svg.i.xl { width: 40px; height: 40px; }
+  .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+  .muted { color: var(--slate-400); } .dim { color: var(--slate-500); }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .between { justify-content: space-between; }
+  .hidden { display: none !important; }
+
+  /* header */
+  header {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    background: rgba(2,6,23,.72); border-bottom: 1px solid var(--slate-800);
+  }
+  .bar { max-width: 1280px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 16px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: -.01em; font-size: 15px; }
+  .logo-mark { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+               background: linear-gradient(135deg, var(--emerald-500), #0d9488); color: #022c22;
+               box-shadow: 0 0 24px rgba(16,185,129,.35); }
+  .logo small { display: block; font-weight: 500; font-size: 11px; color: var(--slate-500); letter-spacing: .04em; text-transform: uppercase; }
+  .grow { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+          border: 1px solid var(--slate-800); background: rgba(15,23,42,.8); font-size: 12px; color: var(--slate-300); white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slate-500); }
+  .dot.on { background: var(--emerald-400); box-shadow: 0 0 0 0 rgba(52,211,153,.6); animation: ping 2s infinite; }
+  .dot.off { background: var(--rose-500); }
+  @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,.55); } 70% { box-shadow: 0 0 0 7px rgba(52,211,153,0); } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } }
+  .who { display: flex; align-items: center; gap: 10px; padding: 4px 12px 4px 4px; border-radius: 999px;
+         border: 1px solid var(--slate-800); background: rgba(15,23,42,.8); }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 650; font-size: 12px;
+            background: linear-gradient(135deg, var(--slate-700), var(--slate-800)); color: var(--slate-100); text-transform: uppercase; }
+  .who .name { font-size: 13px; font-weight: 600; line-height: 1.1; }
+  .who .sub { font-size: 11px; color: var(--slate-500); line-height: 1.1; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; cursor: pointer;
+              background: rgba(15,23,42,.8); border: 1px solid var(--slate-800); color: var(--slate-400); transition: .15s; }
+  .icon-btn:hover { color: var(--slate-100); border-color: var(--slate-600); }
+
+  /* layout */
+  main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 64px; display: grid; gap: 24px;
+         grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; padding: 20px 16px 48px; } .bar { padding: 12px 16px; } .hide-sm { display: none !important; } }
+  .col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+  .card { background: rgba(15,23,42,.8); border: 1px solid var(--slate-800); border-radius: var(--radius);
+          backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 22px; min-width: 0;
+          box-shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 20px 40px -24px rgba(0,0,0,.6); }
+  .card-h { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .card-h h2 { font-size: 15px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--slate-500); }
+  .card p.lead { margin: 2px 0 18px; color: var(--slate-400); font-size: 13px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid; }
+  .b-green { color: var(--emerald-300); background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.3); }
+  .b-amber { color: var(--amber-300); background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.3); }
+  .b-red { color: var(--rose-400); background: rgba(244,63,94,.1); border-color: rgba(244,63,94,.3); }
+  .b-slate { color: var(--slate-300); background: rgba(100,116,139,.12); border-color: var(--slate-700); }
+
+  /* forms */
+  label.f { display: block; font-size: 12px; font-weight: 550; color: var(--slate-400); margin: 0 0 6px; }
+  .field { margin-bottom: 14px; }
+  .input { width: 100%; padding: 10px 12px; border-radius: 10px; font: inherit; color: var(--slate-100);
+           background: rgba(2,6,23,.6); border: 1px solid var(--slate-700); outline: none; transition: .15s; }
+  .input:focus { border-color: var(--emerald-500); box-shadow: 0 0 0 3px rgba(16,185,129,.18); }
+  .input-wrap { position: relative; }
+  .input-wrap .prefix { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--slate-500); font-weight: 600; }
+  .input-wrap .input { padding-left: 52px; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 480px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; border-radius: 10px;
+         font: inherit; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: .18s; white-space: nowrap; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { color: #022c22; background: linear-gradient(135deg, var(--emerald-400), var(--emerald-600));
+                 box-shadow: 0 8px 24px -10px rgba(16,185,129,.7); }
+  .btn-primary:not(:disabled):hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 12px 28px -10px rgba(16,185,129,.85); }
+  .btn-ghost { color: var(--slate-200); background: rgba(30,41,59,.6); border-color: var(--slate-700); }
+  .btn-ghost:not(:disabled):hover { border-color: var(--slate-500); background: rgba(51,65,85,.6); }
+  .btn-amber { color: #1c1003; background: linear-gradient(135deg, var(--amber-300), var(--amber-500)); box-shadow: 0 8px 24px -10px rgba(245,158,11,.7); }
+  .btn-amber:not(:disabled):hover { filter: brightness(1.06); transform: translateY(-1px); }
+  .btn-block { width: 100%; padding: 13px 16px; font-size: 15px; }
+  .btn .label { pointer-events: none; }
+
+  /* security setup */
+  .factor { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 12px;
+            border: 1px solid var(--slate-800); background: rgba(2,6,23,.4); }
+  .factor + .factor { margin-top: 10px; }
+  .factor .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--slate-800); color: var(--slate-300); flex: none; }
+  .factor.done .ic { background: rgba(16,185,129,.15); color: var(--emerald-400); }
+  .factor .t { font-weight: 600; font-size: 13.5px; }
+  .factor .s { font-size: 12px; color: var(--slate-500); }
+  .factor .body { flex: 1; min-width: 0; }
+  .pw-inline { display: flex; gap: 8px; margin-top: 10px; }
+  .pw-inline .input { padding: 8px 10px; }
+
+  /* balances */
+  .acct { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--slate-800); }
+  .acct:first-child { border-top: 0; }
+  .acct .amt { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .meter { height: 4px; background: var(--slate-800); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .meter > i { display: block; height: 100%; background: var(--emerald-500); }
+
+  /* approval center */
+  .empty { text-align: center; padding: 48px 16px; color: var(--slate-500); }
+  .empty .halo { width: 72px; height: 72px; margin: 0 auto 14px; border-radius: 20px; display: grid; place-items: center;
+                 background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.2); color: var(--emerald-400); }
+  .empty h3 { margin: 0 0 4px; color: var(--slate-200); font-size: 15px; }
+
+  .req { position: relative; border-radius: 14px; padding: 22px; overflow: hidden;
+         background: linear-gradient(180deg, rgba(2,6,23,.9), rgba(15,23,42,.9)); border: 1px solid rgba(245,158,11,.35); }
+  .req.pending { animation: glow 2.4s ease-in-out infinite; }
+  .req.pending::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+                         background: linear-gradient(110deg, transparent 30%, rgba(251,191,36,.07) 50%, transparent 70%);
+                         background-size: 250% 100%; animation: sheen 3.2s linear infinite; }
+  @keyframes glow { 0%,100% { box-shadow: 0 0 0 1px rgba(245,158,11,.15), 0 0 28px -8px rgba(245,158,11,.35); }
+                    50% { box-shadow: 0 0 0 1px rgba(245,158,11,.35), 0 0 44px -6px rgba(245,158,11,.55); } }
+  @keyframes sheen { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+  .req.ok { border-color: rgba(16,185,129,.45); box-shadow: 0 0 40px -12px rgba(16,185,129,.5); }
+  .req.bad { border-color: rgba(244,63,94,.45); }
+  .req.warn { border-color: rgba(245,158,11,.5); }
+  .req-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .amount-big { font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .amount-big small { font-size: 15px; color: var(--slate-400); font-weight: 600; margin-left: 6px; }
+  .kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+  @media (max-width: 560px) { .kv { grid-template-columns: 1fr 1fr; } }
+  .kv > div { padding: 10px 12px; border-radius: 10px; background: rgba(30,41,59,.45); border: 1px solid var(--slate-800); min-width: 0; }
+  .kv .k { font-size: 11px; color: var(--slate-500); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  .kv .v { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .risk-note { display: flex; gap: 10px; padding: 12px 14px; border-radius: 10px; font-size: 12.5px;
+               background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.2); color: var(--amber-300); }
+  .risk-note b { color: var(--amber-300); }
+  .steps { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
+  .step { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; border: 1px dashed var(--slate-700); color: var(--slate-400); font-size: 13px; }
+  .step.done { border-style: solid; border-color: rgba(16,185,129,.4); background: rgba(16,185,129,.07); color: var(--emerald-300); }
+  .step .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--slate-800); color: var(--slate-300); flex: none; }
+  .step.done .n { background: var(--emerald-500); color: #022c22; }
+  .timer { font-variant-numeric: tabular-nums; }
+  .timebar { height: 3px; border-radius: 3px; background: var(--slate-800); overflow: hidden; margin-top: 14px; }
+  .timebar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--amber-500), var(--amber-300)); transition: width 1s linear; }
+  .actions { display: grid; gap: 10px; }
+  .actions .row .input { flex: 1; min-width: 0; width: auto; }
+  @media (max-width: 560px) { .req { padding: 16px; } .amount-big { font-size: 28px; } .btn-block { white-space: normal; } }
+  .or { display: flex; align-items: center; gap: 10px; color: var(--slate-600); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--slate-800); }
+  .result-icon { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; }
+  .result-icon.ok { background: rgba(16,185,129,.12); color: var(--emerald-400); }
+  .result-icon.bad { background: rgba(244,63,94,.12); color: var(--rose-400); }
+  .result-icon.warn { background: rgba(245,158,11,.12); color: var(--amber-400); }
+
+  /* audit */
+  .tabs { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: rgba(2,6,23,.6); border: 1px solid var(--slate-800); }
+  .tab { padding: 6px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--slate-400); cursor: pointer; border: 0; background: none; font-family: inherit; }
+  .tab.active { background: var(--slate-800); color: var(--slate-100); }
+  .timeline { list-style: none; margin: 16px 0 0; padding: 0; max-height: 420px; overflow: auto; }
+  .ev { display: grid; grid-template-columns: 22px 1fr auto; gap: 12px; padding: 10px 0; border-top: 1px solid rgba(30,41,59,.7); align-items: start; }
+  .ev:first-child { border-top: 0; }
+  .ev .mk { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; }
+  .ev.ok .mk { background: rgba(16,185,129,.15); color: var(--emerald-400); }
+  .ev.warn .mk { background: rgba(245,158,11,.15); color: var(--amber-400); }
+  .ev.bad .mk { background: rgba(244,63,94,.15); color: var(--rose-400); }
+  .ev.info .mk { background: rgba(56,189,248,.12); color: var(--sky-400); }
+  .ev .t { font-size: 13px; font-weight: 600; }
+  .ev .d { font-size: 12px; color: var(--slate-500); word-break: break-word; }
+  .ev .ts { font-size: 11.5px; color: var(--slate-500); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ev details { margin-top: 6px; }
+  .ev summary { cursor: pointer; font-size: 11.5px; color: var(--slate-500); }
+  .ev pre { margin: 6px 0 0; padding: 10px; border-radius: 8px; background: rgba(2,6,23,.7); border: 1px solid var(--slate-800);
+            font-size: 11.5px; color: var(--slate-300); white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
+  table.tx { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  table.tx th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--slate-500); font-weight: 600; padding: 8px 6px; border-bottom: 1px solid var(--slate-800); }
+  table.tx td { padding: 10px 6px; border-bottom: 1px solid rgba(30,41,59,.7); font-variant-numeric: tabular-nums; }
+  .tx-wrap { overflow-x: auto; }
+
+  /* modal & toast */
+  .scrim { position: fixed; inset: 0; z-index: 40; background: rgba(2,6,23,.7); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+           display: grid; place-items: center; padding: 16px; }
+  .modal { width: 100%; max-width: 460px; background: var(--slate-900); border: 1px solid var(--slate-700); border-radius: 18px; padding: 24px;
+           box-shadow: 0 40px 80px -20px rgba(0,0,0,.8); }
+  .modal h3 { margin: 0; font-size: 17px; }
+  .modal .note { font-size: 12px; color: var(--slate-500); margin: 4px 0 18px; }
+  #toasts { position: fixed; right: 20px; bottom: 20px; z-index: 50; display: grid; gap: 10px; max-width: min(380px, calc(100vw - 32px)); }
+  .toast { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; font-size: 13px;
+           background: var(--slate-900); border: 1px solid var(--slate-700); box-shadow: 0 20px 40px -12px rgba(0,0,0,.7); animation: rise .25s ease-out; }
+  .toast.ok { border-color: rgba(16,185,129,.45); } .toast.ok svg { color: var(--emerald-400); }
+  .toast.bad { border-color: rgba(244,63,94,.45); } .toast.bad svg { color: var(--rose-400); }
+  .toast.warn { border-color: rgba(245,158,11,.45); } .toast.warn svg { color: var(--amber-400); }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  footer { max-width: 1280px; margin: 0 auto; padding: 0 24px 32px; color: var(--slate-600); font-size: 12px; }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
-<h1>PhishGuard: approve a held transfer with two factors</h1>
-<p class="note">Local demo only (served when the WebAuthn RP ID is <code>localhost</code>). Open it as
-<code>http://localhost:8000/demo/webauthn</code>, not 127.0.0.1: browsers refuse an IP address as a WebAuthn RP ID.
-The passkey is verified by the server (signature, origin, RP ID, challenge bound to the action, sign counter,
-user verification = required). Touch ID / Face ID never leaves your device.</p>
 
-<fieldset>
-  <legend>0. Connection</legend>
-  <label for="key">API key</label><input id="key" placeholder="PHISHGUARD_API_KEYS value"><br>
-  <label for="admin">Admin key</label><input id="admin" placeholder="PHISHGUARD_ADMIN_KEYS value (enrollment only)"><br>
-  <label for="user">User</label><input id="user" value="alice">
-  <p class="note">Keys stay in this page's memory and are sent only to this server in the X-API-Key header.</p>
-</fieldset>
+<header>
+  <div class="bar">
+    <div class="logo">
+      <div class="logo-mark" data-icon="shieldCheck"></div>
+      <div>PhishGuard AI Agent<small>Approval Center</small></div>
+    </div>
+    <div class="grow"></div>
+    <div class="pill hide-sm" id="agentPill" title="Server health">
+      <span class="dot" id="agentDot"></span><span id="agentText">Connecting…</span>
+    </div>
+    <div class="who" id="whoCard" title="Signed-in demo user">
+      <div class="avatar" id="avatar">a</div>
+      <div><div class="name" id="whoName">alice</div><div class="sub" id="whoSub">checking factors…</div></div>
+    </div>
+    <button class="icon-btn" id="openSettings" title="Settings (API keys, user)" aria-label="Settings" data-icon="settings"></button>
+  </div>
+</header>
 
-<fieldset>
-  <legend>1. Enroll (once, with the admin key)</legend>
-  <label for="pw">Password</label><input id="pw" type="password" autocomplete="new-password" placeholder="at least 8 characters">
-  <button id="enrollPw">Set password</button><br>
-  <button id="regPasskey">Register a passkey (Touch ID)</button>
-  <button id="factors">Show my factors</button>
-</fieldset>
+<main>
+  <!-- LEFT: action center -->
+  <section class="col">
+    <div class="card">
+      <div class="card-h"><span data-icon="banknote"></span><h2>Action Center</h2></div>
+      <p class="lead">Ask the agent to move money. The gateway holds it until you approve with two factors. The AI can't skip this step.</p>
+      <div class="field">
+        <label class="f" for="amount">Amount</label>
+        <div class="input-wrap"><span class="prefix">AUD</span><input class="input" id="amount" value="5000" inputmode="decimal" autocomplete="off"></div>
+      </div>
+      <div class="field">
+        <label class="f" for="payee">Payee</label>
+        <input class="input mono" id="payee" value="ACME-VENDOR" autocomplete="off">
+      </div>
+      <button class="btn btn-primary btn-block" id="submit"><span class="label">Ask agent to transfer</span><span data-icon="arrowRight"></span></button>
+    </div>
 
-<fieldset>
-  <legend>2. Ask the agent to move money</legend>
-  <label for="amount">Amount (AUD)</label><input id="amount" value="5000"><br>
-  <label for="payee">Payee</label><input id="payee" value="ACME-VENDOR"><br>
-  <button id="submit">Submit transfer_funds</button>
-  <p class="note">The gateway holds it as <code>pending_mfa</code>. Or paste a pending id + digest from curl / the CLI demo:</p>
-  <label for="pid">pending_id</label><input id="pid"><br>
-  <label for="digest">confirm_digest</label><input id="digest">
-</fieldset>
+    <div class="card">
+      <div class="card-h between">
+        <div class="row"><span data-icon="lock"></span><h2>Account security</h2></div>
+        <span class="badge b-slate" id="policyBadge">2 factors required</span>
+      </div>
+      <p class="lead">Approving needs two different factors, and at least one must be something you have (a passkey).</p>
 
-<fieldset>
-  <legend>3. Approve: two different factors, at least one not a password/answer</legend>
-  <label for="pw2">Password</label><input id="pw2" type="password" autocomplete="current-password">
-  <button id="approvePw">Approve with password</button><br>
-  <button id="approvePasskey">Approve with passkey (Touch ID)</button>
-  <button id="status">Pending status</button>
-  <button id="accounts">Balances &amp; history</button>
-</fieldset>
+      <div class="factor" id="fPassword">
+        <div class="ic" data-icon="keyRound"></div>
+        <div class="body">
+          <div class="t">Password</div>
+          <div class="s" id="fPasswordS">Something you know</div>
+          <div class="pw-inline" id="pwSetRow">
+            <input class="input" id="pw" type="password" autocomplete="new-password" placeholder="New password (8+ chars)">
+            <button class="btn btn-ghost" id="enrollPw"><span class="label">Set</span></button>
+          </div>
+        </div>
+        <span class="hidden" id="fPasswordOk" data-icon="checkCircle"></span>
+      </div>
 
-<pre id="log">Ready.</pre>
+      <div class="factor" id="fPasskey">
+        <div class="ic" data-icon="fingerprint"></div>
+        <div class="body">
+          <div class="t">Passkey · Touch ID</div>
+          <div class="s" id="fPasskeyS">Something you have, unlocked by your fingerprint</div>
+        </div>
+        <button class="btn btn-ghost" id="regPasskey"><span class="label">Register</span></button>
+        <span class="hidden" id="fPasskeyOk" data-icon="checkCircle"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h between">
+        <div class="row"><span data-icon="wallet"></span><h2>Balances</h2></div>
+        <button class="icon-btn" id="refreshAccts" title="Refresh" aria-label="Refresh balances" data-icon="refresh"></button>
+      </div>
+      <div id="accounts" style="margin-top:8px"><div class="dim">Connect in Settings to load accounts.</div></div>
+    </div>
+  </section>
+
+  <!-- RIGHT: approval center + audit -->
+  <section class="col">
+    <div class="card">
+      <div class="card-h between">
+        <div class="row"><span data-icon="shieldCheck"></span><h2>AI Safety &amp; MFA Approval</h2></div>
+        <span class="badge b-green" id="centerBadge"><span data-icon="lock" class="sm"></span>Gateway enforced in code</span>
+      </div>
+      <div id="center" style="margin-top:14px"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-h between">
+        <div class="row"><span data-icon="activity"></span><h2>Audit log</h2></div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="events" role="tab">Events</button>
+          <button class="tab" data-tab="tx" role="tab">Transfers</button>
+        </div>
+      </div>
+      <div id="tabEvents">
+        <div class="row between" style="margin-top:10px">
+          <span class="dim" style="font-size:12px">Everything this page sent and received, newest first.</span>
+          <button class="btn btn-ghost" id="verifyChain" style="padding:6px 10px;font-size:12px"><span data-icon="link" class="sm"></span><span class="label">Verify hash chain</span></button>
+        </div>
+        <ul class="timeline" id="timeline"></ul>
+      </div>
+      <div id="tabTx" class="hidden">
+        <div class="tx-wrap"><table class="tx"><thead><tr><th>Time</th><th>Payee</th><th>Amount</th><th>Status</th><th>ID</th></tr></thead><tbody id="txBody"></tbody></table></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>Local demo · served only when the WebAuthn RP ID is <span class="mono">localhost</span>. Open it at
+<span class="mono">http://localhost:8000/demo/webauthn</span>, not 127.0.0.1 (browsers refuse an IP address as an RP ID).
+The server verifies the passkey: signature, origin, RP ID, a challenge bound to this action, the sign counter and user verification.
+Your fingerprint never leaves the device. Simulated bank, no real money.</footer>
+
+<!-- settings -->
+<div class="scrim hidden" id="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="modal">
+    <div class="row between"><h3 id="settingsTitle">Connection settings</h3><button class="icon-btn" id="closeSettings" aria-label="Close" data-icon="x"></button></div>
+    <p class="note">Keys stay in this page's memory only (lost on reload) and are sent only to this server in the X-API-Key header.</p>
+    <div class="field"><label class="f" for="key">API key</label><input class="input mono" id="key" placeholder="PHISHGUARD_API_KEYS value" autocomplete="off"></div>
+    <div class="field"><label class="f" for="admin">Admin key <span class="dim">(enrollment only)</span></label><input class="input mono" id="admin" placeholder="PHISHGUARD_ADMIN_KEYS value" autocomplete="off"></div>
+    <div class="field"><label class="f" for="user">User</label><input class="input" id="user" value="alice" autocomplete="off"></div>
+    <button class="btn btn-primary btn-block" id="saveSettings"><span class="label">Connect</span><span data-icon="arrowRight"></span></button>
+  </div>
+</div>
+<div id="toasts" aria-live="polite"></div>
 
 <script>
 "use strict";
-const $ = (id) => document.getElementById(id);
-const log = (msg, cls) => {
-  const line = document.createElement("div");
-  if (cls) line.className = cls;
-  line.textContent = typeof msg === "string" ? msg : JSON.stringify(msg, null, 2);
-  $("log").prepend(line);
+/* ---------- icons (Lucide, ISC) ---------- */
+const ICONS = {
+  shieldCheck: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  fingerprint: '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/>',
+  arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  checkCircle: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  settings: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+  keyRound: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  xCircle: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  banknote: '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+  wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  loader: '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
 };
+const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+function paintIcons(root = document) {
+  root.querySelectorAll("[data-icon]").forEach((el) => {
+    const cls = el.classList.contains("sm") ? "sm" : el.classList.contains("logo-mark") ? "lg" : "";
+    el.insertAdjacentHTML("afterbegin", icon(el.dataset.icon, cls));
+    el.removeAttribute("data-icon");
+  });
+}
+
+/* ---------- tiny DOM helper: server data always goes through textContent ---------- */
+const $ = (id) => document.getElementById(id);
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") el.className = v;
+    else if (k === "html") el.innerHTML = v; // constant markup (icons) only
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined && v !== false) el.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c !== null && c !== undefined && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+const fmtMoney = (v, cur = "AUD") => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString("en-AU", { style: "currency", currency: cur, minimumFractionDigits: 2 }) : String(v);
+};
+const fmtTime = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const detailOf = (d) => (d && typeof d === "object" ? (typeof d.detail === "string" ? d.detail : d.detail ? JSON.stringify(d.detail) : "") : String(d || ""));
+
+/* ---------- toasts & audit timeline ---------- */
+function toast(msg, cls = "ok") {
+  const ic = cls === "ok" ? "checkCircle" : cls === "bad" ? "xCircle" : "alert";
+  const t = h("div", { class: `toast ${cls}`, html: icon(ic) }, h("div", {}, msg));
+  $("toasts").append(t);
+  setTimeout(() => t.remove(), 4200);
+}
+function event(title, detail, cls = "info", raw = null) {
+  const ic = { ok: "checkCircle", warn: "clock", bad: "xCircle", info: "info" }[cls];
+  const body = h("div", {}, h("div", { class: "t" }, title), detail ? h("div", { class: "d" }, detail) : null);
+  if (raw) body.append(h("details", {}, h("summary", {}, "raw request / response"), h("pre", { class: "mono" }, JSON.stringify(raw, null, 2))));
+  $("timeline").prepend(h("li", { class: `ev ${cls}` }, h("span", { class: "mk", html: icon(ic, "sm") }), body, h("span", { class: "ts" }, fmtTime(new Date()))));
+}
+
+/* ---------- WebAuthn encoding (unchanged) ---------- */
 const b64uToBuf = (s) => {
   const pad = "=".repeat((4 - (s.length % 4)) % 4);
   const bin = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
@@ -82,63 +429,269 @@ const bufToB64u = (buf) => {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
 
-async function api(path, body, admin = false, method = "POST") {
-  const headers = { "content-type": "application/json", "x-api-key": admin ? $("admin").value : $("key").value };
-  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  let data;
-  try { data = await res.json(); } catch { data = await res.text(); }
-  log({ request: `${method} ${path}`, status: res.status, response: data }, res.ok ? "ok" : (res.status === 202 ? "warn" : "bad"));
+/* ---------- API (same requests as before; responses go to the audit timeline) ---------- */
+const cfg = { key: "", admin: "", user: "alice" };
+async function api(path, body, admin = false, method = "POST", quiet = false) {
+  const headers = { "content-type": "application/json", "x-api-key": admin ? cfg.admin : cfg.key };
+  let res, data;
+  try {
+    res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  } catch (e) {
+    event(`${method} ${path}`, `network error: ${e.message}`, "bad");
+    return { status: 0, data: null };
+  }
+  try { data = await res.json(); } catch { data = null; }
+  if (!quiet) {
+    const cls = res.ok ? (res.status === 202 ? "warn" : "ok") : "bad";
+    event(`${method} ${path.split("?")[0]}`, `HTTP ${res.status}${res.ok ? "" : " · " + detailOf(data)}`, cls, { request: body || undefined, response: data });
+  }
   return { status: res.status, data };
 }
-const pending = () => ({ pending_id: $("pid").value.trim(), confirm_digest: $("digest").value.trim() });
 
-$("enrollPw").onclick = () => api("/mfa/enroll/password", { user: $("user").value, password: $("pw").value }, true);
-$("factors").onclick = () => api(`/mfa/factors/${encodeURIComponent($("user").value)}`, null, false, "GET");
+/* ---------- busy buttons ---------- */
+async function busy(btn, fn) {
+  if (btn.disabled) return;
+  const label = btn.querySelector(".label");
+  const prev = label ? label.textContent : "";
+  const ic = btn.querySelector("svg");
+  btn.disabled = true;
+  if (ic) ic.outerHTML = icon("loader", "spin");
+  try { return await fn(); }
+  finally {
+    btn.disabled = false;
+    if (label) label.textContent = prev;
+    const sp = btn.querySelector("svg.spin");
+    if (sp && ic) sp.replaceWith(ic);
+  }
+}
 
-$("regPasskey").onclick = async () => {
-  if (!window.PublicKeyCredential) return log("This browser has no WebAuthn support.", "bad");
-  const { status, data } = await api("/mfa/webauthn/register/options", { user: $("user").value }, true);
+/* ---------- state ---------- */
+let pending = null; // {id, digest, amount, payee, payeeName, expires, total, satisfied[], remaining, needsNonKnowledge, approvable, state, result}
+let factors = [];
+let timer = null;
+
+/* ---------- header / identity ---------- */
+async function loadHealth() {
+  try {
+    const r = await fetch("/health");
+    const d = await r.json();
+    $("agentDot").className = "dot on";
+    $("agentText").textContent = `Agent: Active & Isolated · ${d.llm_mode === "mock" ? "offline model" : d.llm_mode}`;
+  } catch {
+    $("agentDot").className = "dot off";
+    $("agentText").textContent = "Agent offline";
+  }
+}
+async function loadFactors() {
+  $("whoName").textContent = cfg.user;
+  $("avatar").textContent = (cfg.user || "?").slice(0, 1);
+  if (!cfg.key) { $("whoSub").textContent = "not connected"; return; }
+  const { status, data } = await api(`/mfa/factors/${encodeURIComponent(cfg.user)}`, null, false, "GET", true);
+  if (status !== 200) { $("whoSub").textContent = "not connected"; return; }
+  factors = data.enrolled || [];
+  const pol = data.policy || {};
+  $("policyBadge").textContent = `${pol.required || 2} factors required`;
+  $("whoSub").textContent = data.can_approve ? "ready to approve" : `${factors.length} factor${factors.length === 1 ? "" : "s"} enrolled`;
+  setFactor("Password", factors.includes("password"), "Set", "Something you know");
+  setFactor("Passkey", factors.includes("webauthn"), "Registered", "Something you have, unlocked by your fingerprint");
+  $("pwSetRow").classList.toggle("hidden", factors.includes("password"));
+  $("regPasskey").classList.toggle("hidden", factors.includes("webauthn"));
+  if (pending) renderCenter();
+}
+function setFactor(name, on, okText, offText) {
+  $("f" + name).classList.toggle("done", on);
+  $("f" + name + "Ok").classList.toggle("hidden", !on);
+  $("f" + name + "Ok").style.color = "var(--emerald-400)";
+  $("f" + name + "S").textContent = on ? `${okText} · enrolled` : offText;
+}
+
+/* ---------- balances & transfers ---------- */
+async function loadAccounts() {
+  if (!cfg.key) return;
+  const { status, data } = await api("/payments/accounts", null, false, "GET", true);
   if (status !== 200) return;
-  const o = data.publicKey;
-  o.challenge = b64uToBuf(o.challenge);
-  o.user.id = b64uToBuf(o.user.id);
-  (o.excludeCredentials || []).forEach((c) => (c.id = b64uToBuf(c.id)));
-  let cred;
-  try { cred = await navigator.credentials.create({ publicKey: o }); }
-  catch (e) { return log(`navigator.credentials.create failed: ${e.name}: ${e.message}`, "bad"); }
-  const credential = {
-    id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
-    response: {
-      clientDataJSON: bufToB64u(cred.response.clientDataJSON),
-      attestationObject: bufToB64u(cred.response.attestationObject),
-      transports: cred.response.getTransports ? cred.response.getTransports() : [],
-    },
-    clientExtensionResults: cred.getClientExtensionResults(),
-    authenticatorAttachment: cred.authenticatorAttachment || null,
-  };
-  api("/mfa/webauthn/register/verify", { user: $("user").value, credential });
-};
+  const box = $("accounts");
+  box.replaceChildren(...(data.accounts || []).map((a) => {
+    const used = Number(a.daily_used) / Number(a.daily_limit || 1);
+    return h("div", { class: "acct", style: "display:block" },
+      h("div", { class: "row between" }, h("div", {}, h("div", { style: "font-weight:600" }, a.name), h("div", { class: "dim mono", style: "font-size:11.5px" }, a.id)),
+        h("div", { class: "amt" }, fmtMoney(a.balance, a.currency))),
+      h("div", { class: "meter" }, h("i", { style: `width:${Math.min(100, used * 100).toFixed(1)}%` })),
+      h("div", { class: "dim", style: "font-size:11.5px;margin-top:4px" }, `Daily limit used ${fmtMoney(a.daily_used, a.currency)} of ${fmtMoney(a.daily_limit, a.currency)}`));
+  }));
+  const tx = await api("/payments/accounts/OPERATING/transactions?limit=10", null, false, "GET", true);
+  const rows = (tx.data && tx.data.transactions) || [];
+  $("txBody").replaceChildren(...(rows.length ? rows.map((t) => h("tr", {},
+    h("td", { class: "dim" }, t.created_at ? fmtTime(new Date(t.created_at * 1000)) : "-"),
+    h("td", { class: "mono" }, t.payee_id || "-"),
+    h("td", {}, fmtMoney(t.amount, t.currency)),
+    h("td", {}, h("span", { class: `badge ${t.status === "completed" ? "b-green" : t.status === "failed" ? "b-red" : "b-slate"}` }, t.status)),
+    h("td", { class: "mono dim", style: "font-size:11.5px" }, String(t.id || "").slice(0, 12)))) :
+    [h("tr", {}, h("td", { colspan: "5", class: "dim", style: "padding:20px 6px" }, "No transfers yet."))]));
+}
 
-$("submit").onclick = async () => {
+/* ---------- approval center ---------- */
+function renderCenter() {
+  const c = $("center");
+  if (!pending) {
+    c.replaceChildren(h("div", { class: "empty" },
+      h("div", { class: "halo", html: icon("shieldCheck", "xl") }),
+      h("h3", {}, "No actions waiting"),
+      h("div", {}, "When the agent asks to move money, the gateway holds it here until you approve.")));
+    return;
+  }
+  const p = pending;
+  const stateCls = { pending: "pending", executed: "ok", declined: "warn", rejected: "bad", expired: "bad" }[p.state];
+  const card = h("div", { class: `req ${stateCls}` });
+
+  const statusBadge = {
+    pending: h("span", { class: "badge b-amber", html: icon("clock", "sm") }, "Pending MFA"),
+    executed: h("span", { class: "badge b-green", html: icon("checkCircle", "sm") }, "Approved & executed"),
+    declined: h("span", { class: "badge b-amber", html: icon("alert", "sm") }, "Approved, bank declined"),
+    rejected: h("span", { class: "badge b-red", html: icon("xCircle", "sm") }, "Rejected"),
+    expired: h("span", { class: "badge b-red", html: icon("clock", "sm") }, "Expired"),
+  }[p.state];
+
+  card.append(h("div", { class: "req-top" },
+    h("div", {}, h("div", { class: "eyebrow" }, "Transfer request · held by gateway"),
+      h("div", { class: "amount-big" }, fmtMoney(p.amount).replace(/^A?\$/, "$"), h("small", {}, "AUD")),
+      h("div", { class: "muted", style: "margin-top:4px" }, "to ", h("b", { style: "color:var(--slate-100)" }, p.payeeName || p.payee),
+        p.payeeName ? h("span", { class: "mono dim" }, `  ${p.payee}`) : null)),
+    statusBadge));
+
+  card.append(h("div", { class: "kv" },
+    h("div", {}, h("div", { class: "k" }, "Risk level"), h("div", { class: "v", style: "color:var(--amber-300)" }, "High · moves funds")),
+    h("div", {}, h("div", { class: "k" }, "Requested by"), h("div", { class: "v" }, p.user)),
+    h("div", {}, h("div", { class: "k" }, "Action digest"), h("div", { class: "v mono", title: "Hash of action + params + requester. Every factor must echo it, so an approval can't be replayed on a different transfer." }, p.digest))));
+
+  if (p.state === "pending") {
+    card.append(h("div", { class: "risk-note", html: icon("alert") },
+      h("div", {}, h("b", {}, "Why it's held: "), "moving money always needs MFA. That rule is fixed in code (policy.py), not decided by the AI, and the AI has no way to approve it.")));
+
+    const hasPw = p.satisfied.includes("password"), hasPk = p.satisfied.includes("webauthn");
+    card.append(h("div", { class: "steps" },
+      h("div", { class: `step ${hasPk ? "done" : ""}` }, h("span", { class: "n", html: hasPk ? icon("checkCircle", "sm") : "" }, hasPk ? "" : "1"), "Passkey · Touch ID"),
+      h("div", { class: `step ${hasPw ? "done" : ""}` }, h("span", { class: "n", html: hasPw ? icon("checkCircle", "sm") : "" }, hasPw ? "" : "2"), "Password")));
+
+    if (!p.approvable && !factorsReady()) {
+      card.append(h("div", { class: "risk-note", style: "margin-bottom:14px", html: icon("info") },
+        h("div", {}, "You need a password and a passkey enrolled before this can be approved. Set them up under Account security on the left.")));
+    }
+    const actions = h("div", { class: "actions" });
+    if (!hasPk) actions.append(h("button", { class: "btn btn-amber btn-block", id: "approvePasskey", onclick: (e) => busy(e.currentTarget, approvePasskey), html: icon("fingerprint") }, h("span", { class: "label" }, "Approve with Passkey (Touch ID)")));
+    if (!hasPw) {
+      if (!hasPk) actions.append(h("div", { class: "or" }, "and"));
+      const pw = h("input", { class: "input", id: "pw2", type: "password", autocomplete: "current-password", placeholder: "Your password" });
+      pw.addEventListener("keydown", (e) => { if (e.key === "Enter") $("approvePw").click(); });
+      actions.append(h("div", { class: "row" }, pw, h("button", { class: "btn btn-ghost", id: "approvePw", onclick: (e) => busy(e.currentTarget, approvePw), html: icon("keyRound") }, h("span", { class: "label" }, "Approve"))));
+    }
+    card.append(actions);
+    const left = Math.max(0, p.expires - Date.now() / 1000);
+    card.append(h("div", { class: "row between dim", style: "margin-top:14px;font-size:12px" },
+      h("span", {}, `${p.satisfied.length} of ${p.total} factors`),
+      h("span", { class: "timer", id: "timer" }, `auto-reject in ${Math.ceil(left)}s`)));
+    card.append(h("div", { class: "timebar" }, h("i", { id: "timebar", style: `width:${(left / p.window) * 100}%` })));
+  } else {
+    const meta = {
+      executed: ["ok", "checkCircle", "Transfer executed", p.result && (p.result.transaction_id || p.result.id) ? `Transaction ${p.result.transaction_id || p.result.id} · factors: ${p.satisfied.join(" + ")}` : `Factors: ${p.satisfied.join(" + ")}`],
+      declined: ["warn", "alert", "MFA passed, but the bank held the payment", declineText(p.result)],
+      rejected: ["bad", "xCircle", "Request rejected", p.error || "Too many failed factor attempts."],
+      expired: ["bad", "clock", "Request expired", "Nobody approved it in time, so the gateway rejected it automatically."],
+    }[p.state];
+    card.append(h("div", { class: "row", style: "gap:14px;margin-top:6px" },
+      h("div", { class: `result-icon ${meta[0]}`, html: icon(meta[1], "lg") }),
+      h("div", {}, h("div", { style: "font-weight:650;font-size:15px" }, meta[2]), h("div", { class: "muted", style: "font-size:12.5px" }, meta[3]))));
+    card.append(h("button", { class: "btn btn-ghost btn-block", style: "margin-top:18px", onclick: () => { pending = null; renderCenter(); } }, "Dismiss"));
+  }
+  c.replaceChildren(card);
+}
+const factorsReady = () => factors.includes("webauthn") && factors.length >= 2;
+function declineText(r) {
+  const o = (r && (r.outcome || r)) || {};
+  if (o.error === "cooling_off") return "Payee bank details changed recently, so payments are held during the cooling-off period (a business email compromise control).";
+  return o.message || o.error || "The provider refused the payment.";
+}
+function tick() {
+  if (!pending || pending.state !== "pending") return;
+  const left = pending.expires - Date.now() / 1000;
+  if (left <= 0) {
+    pending.state = "expired";
+    event("Pending action expired", `${pending.id} · auto-rejected by the gateway`, "bad");
+    renderCenter();
+    return;
+  }
+  if ($("timer")) $("timer").textContent = `auto-reject in ${Math.ceil(left)}s`;
+  if ($("timebar")) $("timebar").style.width = `${(left / pending.window) * 100}%`;
+}
+
+function applyFactorResponse(status, data) {
+  if (status === 200 && data.status === "executed") {
+    pending.state = "executed"; pending.result = data.result; pending.satisfied = data.factors || pending.satisfied;
+    toast("Approved with two factors. Transfer executed.");
+    loadAccounts();
+  } else if (status === 422 && data.status === "declined") {
+    pending.state = "declined"; pending.result = data.result; pending.satisfied = data.factors || pending.satisfied;
+    toast("MFA passed, but the bank held the payment.", "warn");
+  } else if (status === 202) {
+    pending.satisfied = data.factors_satisfied || pending.satisfied;
+    pending.remaining = data.factors_remaining;
+    toast(`${data.accepted === "webauthn" ? "Passkey" : "Password"} verified. One more factor needed.`, "warn");
+  } else if (status === 410) {
+    pending.state = "expired";
+  } else if (status === 409) {
+    pending.state = "rejected"; pending.error = detailOf(data);
+  } else {
+    const d = data && data.detail;
+    const left = d && typeof d === "object" ? d.attempts_left : undefined;
+    if (left === 0) { pending.state = "rejected"; pending.error = "Too many wrong attempts. The action was rejected."; }
+    toast(left !== undefined ? `Verification failed · ${left} attempt${left === 1 ? "" : "s"} left` : `Verification failed · ${detailOf(data)}`, "bad");
+  }
+  renderCenter();
+}
+
+/* ---------- actions ---------- */
+const pendingRef = () => ({ pending_id: pending.id, confirm_digest: pending.digest });
+
+async function submitTransfer() {
+  if (!cfg.key) { openSettings(); return toast("Connect with your API key first.", "warn"); }
+  const amount = $("amount").value.trim(), payee = $("payee").value.trim();
   const { status, data } = await api("/actions", {
-    action_type: "transfer_funds", requested_by: $("user").value,
-    params: { amount: $("amount").value, payee_id: $("payee").value },
+    action_type: "transfer_funds", requested_by: cfg.user,
+    params: { amount, payee_id: payee },
   });
-  if (status === 202) { $("pid").value = data.pending_id; $("digest").value = data.confirm_digest; }
-};
+  if (status === 202) {
+    const now = Date.now() / 1000;
+    pending = { id: data.pending_id, digest: data.confirm_digest, amount, payee, payeeName: "", user: cfg.user,
+      expires: data.expires_at, window: Math.max(1, data.expires_at - now), total: (data.mfa_policy && data.mfa_policy.required) || 2,
+      satisfied: [], remaining: null, approvable: data.approvable, state: "pending", result: null };
+    renderCenter();
+    toast("Held by the gateway. Approve it in the Approval Center.", "warn");
+    const p = await api(`/payments/payees/${encodeURIComponent(payee)}`, null, false, "GET", true);
+    if (p.status === 200 && pending && pending.payee === payee) { pending.payeeName = p.data.name; renderCenter(); }
+  } else if (status === 200) {
+    toast("Executed without MFA (low-risk action).");
+  } else {
+    toast(`Request refused · ${detailOf(data)}`, "bad");
+  }
+}
 
-$("approvePw").onclick = () =>
-  api("/mfa/factor", { ...pending(), method: "password", response: { password: $("pw2").value } });
+async function approvePw() {
+  const pw = $("pw2").value;
+  if (!pw) return toast("Enter your password.", "warn");
+  const { status, data } = await api("/mfa/factor", { ...pendingRef(), method: "password", response: { password: pw } });
+  applyFactorResponse(status, data);
+}
 
-$("approvePasskey").onclick = async () => {
-  const { status, data } = await api("/mfa/challenge", { ...pending(), method: "webauthn" });
-  if (status !== 200) return;
+async function approvePasskey() {
+  if (!window.PublicKeyCredential) return toast("This browser has no WebAuthn support.", "bad");
+  const { status, data } = await api("/mfa/challenge", { ...pendingRef(), method: "webauthn" });
+  if (status !== 200) return applyFactorResponse(status, data);
   const o = data.publicKey;
   o.challenge = b64uToBuf(o.challenge);
   (o.allowCredentials || []).forEach((c) => (c.id = b64uToBuf(c.id)));
   let a;
   try { a = await navigator.credentials.get({ publicKey: o }); }
-  catch (e) { return log(`navigator.credentials.get failed: ${e.name}: ${e.message}`, "bad"); }
+  catch (e) { event("navigator.credentials.get failed", `${e.name}: ${e.message}`, "bad"); return toast("Passkey prompt was cancelled.", "warn"); }
   const credential = {
     id: a.id, rawId: bufToB64u(a.rawId), type: a.type,
     response: {
@@ -150,14 +703,90 @@ $("approvePasskey").onclick = async () => {
     clientExtensionResults: a.getClientExtensionResults(),
     authenticatorAttachment: a.authenticatorAttachment || null,
   };
-  api("/mfa/factor", { ...pending(), method: "webauthn", response: { credential } });
-};
+  const r = await api("/mfa/factor", { ...pendingRef(), method: "webauthn", response: { credential } });
+  applyFactorResponse(r.status, r.data);
+}
 
-$("status").onclick = () => api(`/mfa/pending/${encodeURIComponent($("pid").value.trim())}`, null, false, "GET");
-$("accounts").onclick = async () => {
-  await api("/payments/accounts", null, false, "GET");
-  api("/payments/accounts/OPERATING/transactions?limit=5", null, false, "GET");
-};
+async function enrollPassword() {
+  if (!cfg.admin) { openSettings(); return toast("Enrollment needs the admin key (Settings).", "warn"); }
+  const { status, data } = await api("/mfa/enroll/password", { user: cfg.user, password: $("pw").value }, true);
+  if (status === 200) { $("pw").value = ""; toast("Password set."); loadFactors(); }
+  else toast(`Couldn't set password · ${detailOf(data)}`, "bad");
+}
+
+async function registerPasskey() {
+  if (!window.PublicKeyCredential) return toast("This browser has no WebAuthn support.", "bad");
+  if (!cfg.admin) { openSettings(); return toast("Enrollment needs the admin key (Settings).", "warn"); }
+  const { status, data } = await api("/mfa/webauthn/register/options", { user: cfg.user }, true);
+  if (status !== 200) return toast(`Couldn't start registration · ${detailOf(data)}`, "bad");
+  const o = data.publicKey;
+  o.challenge = b64uToBuf(o.challenge);
+  o.user.id = b64uToBuf(o.user.id);
+  (o.excludeCredentials || []).forEach((c) => (c.id = b64uToBuf(c.id)));
+  let cred;
+  try { cred = await navigator.credentials.create({ publicKey: o }); }
+  catch (e) { event("navigator.credentials.create failed", `${e.name}: ${e.message}`, "bad"); return toast("Passkey registration was cancelled.", "warn"); }
+  const credential = {
+    id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+    response: {
+      clientDataJSON: bufToB64u(cred.response.clientDataJSON),
+      attestationObject: bufToB64u(cred.response.attestationObject),
+      transports: cred.response.getTransports ? cred.response.getTransports() : [],
+    },
+    clientExtensionResults: cred.getClientExtensionResults(),
+    authenticatorAttachment: cred.authenticatorAttachment || null,
+  };
+  const r = await api("/mfa/webauthn/register/verify", { user: cfg.user, credential });
+  if (r.status === 200) { toast("Passkey registered."); loadFactors(); }
+  else toast(`Passkey not accepted · ${detailOf(r.data)}`, "bad");
+}
+
+async function verifyChain() {
+  const { status, data } = await api("/audit/verify", null, false, "GET", true);
+  if (status !== 200) return toast(`Couldn't verify · ${detailOf(data)}`, "bad");
+  if (data.chain_ok) { event("Audit hash chain verified", "Every audit entry links to the previous one. Nothing was edited or removed.", "ok", data); toast("Audit chain intact."); }
+  else { event("Audit hash chain BROKEN", `first broken entry: ${data.first_broken}`, "bad", data); toast("Audit chain broken!", "bad"); }
+}
+
+/* ---------- settings ---------- */
+function openSettings() { $("settings").classList.remove("hidden"); setTimeout(() => (cfg.key ? $("user") : $("key")).focus(), 30); }
+function closeSettings() { $("settings").classList.add("hidden"); }
+async function saveSettings() {
+  cfg.key = $("key").value.trim(); cfg.admin = $("admin").value.trim(); cfg.user = $("user").value.trim() || "alice";
+  if (!cfg.key) return toast("The API key is required.", "warn");
+  const r = await api(`/mfa/factors/${encodeURIComponent(cfg.user)}`, null, false, "GET", true);
+  if (r.status === 401 || r.status === 403) { cfg.key = ""; return toast("That API key was rejected.", "bad"); }
+  closeSettings();
+  event("Connected", `as ${cfg.user}${cfg.admin ? " (admin key loaded for enrollment)" : ""}`, "ok");
+  if (pending && pending.user !== cfg.user) { pending = null; renderCenter(); }
+  await Promise.all([loadFactors(), loadAccounts()]);
+}
+
+/* ---------- wire up ---------- */
+paintIcons();
+$("submit").onclick = (e) => busy(e.currentTarget, submitTransfer);
+$("enrollPw").onclick = (e) => busy(e.currentTarget, enrollPassword);
+$("pw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("enrollPw").click(); });
+$("regPasskey").onclick = (e) => busy(e.currentTarget, registerPasskey);
+$("refreshAccts").onclick = () => loadAccounts();
+$("verifyChain").onclick = (e) => busy(e.currentTarget, verifyChain);
+$("openSettings").onclick = openSettings;
+$("whoCard").onclick = openSettings;
+$("closeSettings").onclick = closeSettings;
+$("saveSettings").onclick = (e) => busy(e.currentTarget, saveSettings);
+$("settings").addEventListener("keydown", (e) => { if (e.key === "Enter") $("saveSettings").click(); if (e.key === "Escape") closeSettings(); });
+$("settings").addEventListener("click", (e) => { if (e.target === $("settings")) closeSettings(); });
+document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => {
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+  $("tabEvents").classList.toggle("hidden", t.dataset.tab !== "events");
+  $("tabTx").classList.toggle("hidden", t.dataset.tab !== "tx");
+}));
+timer = setInterval(tick, 1000);
+renderCenter();
+loadHealth();
+loadFactors();
+event("Page loaded", "Open Settings (top right) to connect with your API key.", "info");
+openSettings();
 </script>
 </body>
 </html>

@@ -69,3 +69,15 @@ def recall_at_fpr(scores: Sequence[Scored], target_fpr: float, ref_category: str
 
 def sweep(scores: Sequence[Scored], thresholds: Iterable[float] = SWEEP_THRESHOLDS) -> list[dict]:
     return [at_threshold(scores, t) for t in thresholds]
+
+
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson score interval for a proportion k/n (stays inside [0, 1] and behaves at k=0 or k=n,
+    unlike the normal approximation). Returns (0, 1) when n == 0."""
+    if n <= 0:
+        return 0.0, 1.0
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / d
+    return max(0.0, c - h), min(1.0, c + h)

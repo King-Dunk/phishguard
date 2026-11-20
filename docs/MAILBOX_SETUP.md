@@ -2,7 +2,7 @@
 
 This guide connects PhishGuard to Gmail / Google Workspace, Microsoft 365 / Outlook.com, or any IMAP mailbox (iCloud, Yahoo, Fastmail, QQ, 163, Zoho, ...). It is written for someone who has never registered an OAuth app. Allow 15-30 minutes for Google or Microsoft, 5 minutes for IMAP.
 
-> **Status.** The connectors were tested only against offline fakes of each API (see [Testing](#what-was-and-wasnt-tested)). They have not yet been run against a real Google, Microsoft or IMAP account. Expect to be the first, and please report what breaks.
+> **Status.** The Gmail connector has read one real personal inbox (read-only, since 2026-11-14). The Microsoft Graph and IMAP connectors were tested only against offline fakes of each API (see [Testing](#what-was-and-wasnt-tested)) and have not been run against a real account yet. Expect to be the first, and please report what breaks.
 
 **Two rules before you start**
 
@@ -207,7 +207,7 @@ Remediation runs through the MFA gateway like every other state change, with a *
    ```bash
    python -m phishguard.mailbox_guard --provider gmail --action label --action quarantine
    ```
-   Actions are written to the hash-chained audit log (`PHISHGUARD_DB_PATH` / `PHISHGUARD_AUDIT_LOG`). The worker never approves MFA itself: anything that needs MFA stays pending and is logged. "MFA" here is the same two-factor policy as for payments (two different methods, at least one TOTP or passkey; see the README's MFA section). Approval happens in the process that holds the pending action; the worker has no approval interface yet, so held mailbox actions currently expire unless approved programmatically through `gateway.verify_factor`.
+   Actions are written to the hash-chained audit log (`PHISHGUARD_DB_PATH` / `PHISHGUARD_AUDIT_LOG`). The worker never approves MFA itself: anything that needs MFA stays pending and is logged. "MFA" here is the same two-factor policy as for payments (two different methods, at least one TOTP or passkey; see [REFERENCE.md](REFERENCE.md#mfa-two-factors-per-sensitive-action)). Approval happens in the process that holds the pending action; the worker has no approval interface yet, so held mailbox actions currently expire unless approved programmatically through `gateway.verify_factor`.
 
 Keep the write credential out of a scan-only deployment entirely. Then a bug or compromise in the scanner can't change mail.
 
