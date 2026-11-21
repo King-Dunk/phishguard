@@ -182,6 +182,7 @@ Full list and roadmap: [LIMITATIONS.md](docs/LIMITATIONS.md).
 | [MAILBOX_SETUP.md](docs/MAILBOX_SETUP.md) | Connecting Gmail, Microsoft 365 or an IMAP mailbox, read-only |
 | [PAYMENTS_INTEGRATION.md](docs/PAYMENTS_INTEGRATION.md) | Where a real bank, Stripe or Xero adapter plugs in |
 | [LIMITATIONS.md](docs/LIMITATIONS.md) | All known limitations and the roadmap |
+| [notes/](docs/notes/README.md) | Study notes in Chinese: how each part works, the mistakes along the way, and an opinion piece |
 
 ## Data and licences
 
