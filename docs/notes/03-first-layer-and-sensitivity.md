@@ -55,11 +55,11 @@
 
 ```python
 def lowered_risk(base, llm, features, s):
-    lo, hi = s.llm_lower_zone                       # 20–50
+    lo, hi = s.llm_lower_zone  # 20–50
     if not s.llm_may_lower or llm >= base or not lo <= base <= hi:
-        return base                                  # 没打开，或不在灰区：规则说了算
+        return base  # 没打开，或不在灰区：规则说了算
     if any(f.name in VETO_FEATURES for f in features):
-        return base                                  # 藏文字、混淆、对 AI 说话：一票否决
+        return base  # 藏文字、混淆、对 AI 说话：一票否决
     return min(base, max(llm, lo, content_floor(features)))
 ```
 

@@ -46,7 +46,7 @@ def action_digest(action, params, requested_by):
 ```python
 def satisfied(self, methods):
     ms = set(methods) & set(METHODS)
-    if len(ms) < self.required:              # 默认要 2 种不同方式
+    if len(ms) < self.required:  # 默认要 2 种不同方式
         return False
     return self.allow_knowledge_only or any(CATEGORY[m] != KNOWLEDGE for m in ms)
 ```
@@ -70,6 +70,7 @@ def satisfied(self, methods):
 
 ```python
 _SECRET = object()
+
 
 class ExecutionGrant:
     def __init__(self, token, digest, pending_id=None):
